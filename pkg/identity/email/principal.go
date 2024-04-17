@@ -16,7 +16,9 @@ package email
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/identity"
 	"github.com/sigstore/fulcio/pkg/oauthflow"
+	"github.com/sigstore/fulcio/pkg/zkp"
 )
 
 type principal struct {
@@ -66,8 +69,24 @@ func (p principal) Name(_ context.Context) string {
 	return p.address
 }
 
-func (p principal) Embed(_ context.Context, cert *x509.Certificate) error {
-	cert.EmailAddresses = []string{p.address}
+func (p principal) Embed(ctx context.Context, cert *x509.Certificate) error {
+	l := ctx.Value("commitments")
+	if l != nil {
+		commits, ok := l.([]zkp.CurvePoint)
+		if ok {
+			h := sha256.New()
+			for _, c := range commits {
+				h.Write(c.X.Bytes())
+				h.Write([]byte{','})
+				h.Write(c.Y.Bytes())
+				h.Write([]byte{','})
+			}
+			id := h.Sum([]byte{})
+			cert.EmailAddresses = []string{fmt.Sprintf("%s@zkp.sigstore.dev", hex.EncodeToString(id))}
+		}
+	} else {
+		cert.EmailAddresses = []string{p.address}
+	}
 
 	var err error
 	cert.ExtraExtensions, err = certificate.Extensions{

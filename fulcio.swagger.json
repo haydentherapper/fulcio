@@ -126,6 +126,10 @@
           "format": "byte",
           "description": "Contains the public key to be stored in the requested certificate. All other CSR fields\nare ignored. Since the CSR is self-signed, it also acts as a proof of possession of\nthe private key.\n\nIn particular, the CSR's subject name is not verified, or tested for\ncompatibility with its specified X.509 name type (e.g. email address).",
           "title": "PKCS#10 PEM-encoded certificate signing request"
+        },
+        "zkpCredentials": {
+          "$ref": "#/definitions/v2ZKPCredentials",
+          "title": "Optional"
         }
       },
       "required": [
@@ -191,6 +195,23 @@
           "description": "The PEM-encoded certificate chain, ordered from leaf to intermediate to root as applicable."
         }
       }
+    },
+    "v2Commitment": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "string",
+          "format": "byte"
+        },
+        "y": {
+          "type": "string",
+          "format": "byte"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
     },
     "v2Configuration": {
       "type": "object",
@@ -316,6 +337,39 @@
           "description": "The set of PEM-encoded certificate chains for this Fulcio instance; each chain will start with any\nintermediate certificates (if present), finishing with the root certificate."
         }
       }
+    },
+    "v2ZKPCredentials": {
+      "type": "object",
+      "properties": {
+        "commitments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v2Commitment"
+          }
+        },
+        "inclusionProof": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "byte"
+          }
+        },
+        "index": {
+          "type": "string",
+          "format": "int64"
+        },
+        "randomSecret": {
+          "type": "string",
+          "format": "byte"
+        }
+      },
+      "required": [
+        "commitments",
+        "inclusionProof",
+        "index",
+        "randomSecret"
+      ]
     }
   },
   "externalDocs": {

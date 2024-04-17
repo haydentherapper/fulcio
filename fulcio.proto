@@ -108,6 +108,20 @@ message CreateSigningCertificateRequest {
         */
         bytes certificate_signing_request  = 3 [(google.api.field_behavior) = REQUIRED];
     }
+    // Optional
+    ZKPCredentials zkp_credentials = 4;
+}
+
+message ZKPCredentials {
+    repeated Commitment commitments = 1 [(google.api.field_behavior) = REQUIRED];
+    repeated bytes inclusion_proof = 2 [(google.api.field_behavior) = REQUIRED];
+    int64 index = 3 [(google.api.field_behavior) = REQUIRED];
+    bytes random_secret = 4 [(google.api.field_behavior) = REQUIRED];
+}
+
+message Commitment {
+    bytes x = 1 [(google.api.field_behavior) = REQUIRED];
+    bytes y = 2 [(google.api.field_behavior) = REQUIRED];
 }
 
 message Credentials {

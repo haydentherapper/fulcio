@@ -30,6 +30,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -46,6 +47,7 @@ import (
 	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/generated/protobuf"
 	"github.com/sigstore/fulcio/pkg/identity"
+	"github.com/sigstore/fulcio/pkg/zkp"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -414,6 +416,124 @@ func TestAPIWithEmail(t *testing.T) {
 			t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
 		}
 		if leafCert.EmailAddresses[0] != c.ExpectedSubject {
+			t.Fatalf("subjects do not match: Expected %v, got %v", c.ExpectedSubject, leafCert.EmailAddresses[0])
+		}
+	}
+}
+
+func TestAPIWithEmailWithZKP(t *testing.T) {
+	emailSigner, emailIssuer := newOIDCIssuer(t)
+
+	// Create a FulcioConfig that supports these issuers.
+	cfg, err := config.Read([]byte(fmt.Sprintf(`{
+		"OIDCIssuers": {
+			%q: {
+				"IssuerURL": %q,
+				"ClientID": "sigstore",
+				"Type": "email"
+			}
+		}
+	}`, emailIssuer, emailIssuer)))
+	if err != nil {
+		t.Fatalf("config.Read() = %v", err)
+	}
+
+	emailSubject := "foo@example.com"
+
+	tests := []oidcTestContainer{
+		{
+			Signer: emailSigner, Issuer: emailIssuer, Subject: emailSubject, ExpectedSubject: emailSubject,
+		},
+	}
+	for _, c := range tests {
+		// Create an OIDC token using this issuer's signer.
+		tok, err := jwt.Signed(c.Signer).Claims(jwt.Claims{
+			Issuer:   c.Issuer,
+			IssuedAt: jwt.NewNumericDate(time.Now()),
+			Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
+			Subject:  c.Subject,
+			Audience: jwt.Audience{"sigstore"},
+		}).Claims(customClaims{Email: c.Subject, EmailVerified: true}).CompactSerialize()
+		if err != nil {
+			t.Fatalf("CompactSerialize() = %v", err)
+		}
+
+		ctClient, eca := createCA(cfg, t)
+		ctx := context.Background()
+		server, conn := setupGRPCForTest(ctx, t, cfg, ctClient, eca)
+		defer func() {
+			server.Stop()
+			conn.Close()
+		}()
+
+		client := protobuf.NewCAClient(conn)
+
+		pubBytes, proof := generateKeyAndProof(c.Subject, t)
+
+		var emails []string
+		emails = append(emails, emailSubject)
+		// add three more subjects
+		for i := 0; i < 3; i++ {
+			emails = append(emails, fmt.Sprintf("%s, %d", emailSubject, i))
+		}
+
+		g, h := zkp.NewFixedGenerators()
+		var rs []*big.Int
+		var commitments []zkp.CurvePoint
+		for i := 0; i < 4; i++ {
+			id := new(big.Int)
+			id.SetBytes([]byte(emails[i]))
+			r := new(big.Int)
+			var err error
+			r, err = rand.Int(rand.Reader, elliptic.P256().Params().N)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commit := zkp.PedersenCommitment(*g, *h, id, r)
+			rs = append(rs, r)
+			commitments = append(commitments, commit)
+		}
+		var cs []*protobuf.Commitment
+		for _, c := range commitments {
+			pc := &protobuf.Commitment{}
+			pc.X = c.X.Bytes()
+			pc.Y = c.Y.Bytes()
+			cs = append(cs, pc)
+		}
+
+		// Hit the API to have it sign our certificate.
+		resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
+			Credentials: &protobuf.Credentials{
+				Credentials: &protobuf.Credentials_OidcIdentityToken{
+					OidcIdentityToken: tok,
+				},
+			},
+			Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
+				PublicKeyRequest: &protobuf.PublicKeyRequest{
+					PublicKey: &protobuf.PublicKey{
+						Content: pubBytes,
+					},
+					ProofOfPossession: proof,
+				},
+			},
+			ZkpCredentials: &protobuf.ZKPCredentials{
+				Commitments:    cs,
+				InclusionProof: [][]byte{}, // Not verified currently
+				Index:          0,
+				RandomSecret:   rs[0].Bytes(),
+			},
+		})
+		if err != nil {
+			t.Fatalf("SigningCert() = %v", err)
+		}
+
+		leafCert := verifyResponse(resp, eca, c.Issuer, t)
+
+		// Expect email subject
+		if len(leafCert.EmailAddresses) != 1 {
+			t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
+		}
+		if !strings.HasSuffix(leafCert.EmailAddresses[0], "zkp.sigstore.dev") {
 			t.Fatalf("subjects do not match: Expected %v, got %v", c.ExpectedSubject, leafCert.EmailAddresses[0])
 		}
 	}

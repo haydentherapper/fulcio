@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 
 	health "google.golang.org/grpc/health/grpc_health_v1"
 
@@ -32,6 +33,7 @@ import (
 	fulciogrpc "github.com/sigstore/fulcio/pkg/generated/protobuf"
 	"github.com/sigstore/fulcio/pkg/identity"
 	"github.com/sigstore/fulcio/pkg/log"
+	"github.com/sigstore/fulcio/pkg/zkp"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -132,6 +134,40 @@ func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *f
 		if err := challenges.CheckSignature(publicKey, proofOfPossession, principal.Name(ctx)); err != nil {
 			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidSignature)
 		}
+	}
+
+	// Verify and add commitments if present
+	zkpCreds := request.GetZkpCredentials()
+	if zkpCreds != nil {
+		g1, h1 := zkp.NewFixedGenerators()
+		index := zkpCreds.GetIndex()
+		r := new(big.Int)
+		r.SetBytes(zkpCreds.GetRandomSecret())
+
+		var commits []zkp.CurvePoint
+		for _, c := range zkpCreds.GetCommitments() {
+			var commit zkp.CurvePoint
+			x := new(big.Int)
+			y := new(big.Int)
+			x.SetBytes(c.GetX())
+			y.SetBytes(c.GetY())
+			commit.X, commit.Y = x, y
+			commits = append(commits, commit)
+		}
+
+		name := principal.Name(ctx)
+		id := new(big.Int)
+		id.SetBytes([]byte(name))
+
+		c := zkp.PedersenCommitment(*g1, *h1, id, r)
+		if !c.Equals(commits[index]) {
+			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, errors.New("invalid commitment provided"), "Generated commitment did not match provided commitment")
+		}
+
+		// TODO: Verify inclusion proof for registry inclusion
+		// zkpCreds.GetInclusionProof()
+
+		ctx = context.WithValue(ctx, "commitments", commits)
 	}
 
 	var csc *certauth.CodeSigningCertificate
