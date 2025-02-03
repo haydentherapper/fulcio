@@ -31,6 +31,7 @@ import (
 type principal struct {
 	address string
 	issuer  string
+	// digest  []byte
 }
 
 func PrincipalFromIDToken(ctx context.Context, token *oidc.IDToken) (identity.Principal, error) {
@@ -56,9 +57,12 @@ func PrincipalFromIDToken(ctx context.Context, token *oidc.IDToken) (identity.Pr
 		return nil, err
 	}
 
+	// digest := request.ArtfactDigestFromContext(ctx)
+
 	return principal{
 		issuer:  issuer,
 		address: emailAddress,
+		// digest:  digest,
 	}, nil
 }
 

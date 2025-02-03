@@ -18,7 +18,6 @@ package app
 import (
 	"context"
 	"crypto"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -31,6 +30,7 @@ import (
 	"testing"
 
 	"github.com/sigstore/fulcio/pkg/ca"
+	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/identity"
 	"github.com/spf13/viper"
 
@@ -47,7 +47,7 @@ func setupHTTPServer(t *testing.T) (httpServer, string) {
 
 	viper.Set("grpc-host", "")
 	viper.Set("grpc-port", 0)
-	grpcServer, err := createGRPCServer(nil, nil, &TrivialCertificateAuthority{}, nil)
+	grpcServer, err := createGRPCServer(config.DefaultConfig, nil, &TrivialCertificateAuthority{}, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -64,7 +64,7 @@ func setupHTTPServer(t *testing.T) (httpServer, string) {
 	}
 
 	httpHost := httpListen.Addr().String()
-	httpServer := createHTTPServer(context.Background(), httpHost, grpcServer, nil)
+	httpServer := createHTTPServer(context.Background(), httpHost, grpcServer)
 	go func() {
 		_ = httpServer.Serve(httpListen)
 		grpcServer.GracefulStop()
@@ -93,7 +93,7 @@ func setupHTTPServerWithGRPCTLS(t *testing.T) (httpServer, string) {
 
 	viper.Set("grpc-host", "")
 	viper.Set("grpc-port", 0)
-	grpcServer, err := createGRPCServer(nil, nil, &TrivialCertificateAuthority{}, nil)
+	grpcServer, err := createGRPCServer(config.DefaultConfig, nil, &TrivialCertificateAuthority{}, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -109,14 +109,9 @@ func setupHTTPServerWithGRPCTLS(t *testing.T) (httpServer, string) {
 	if err != nil {
 		t.Error(err)
 	}
-	legacyGRPCServer, err := createLegacyGRPCServer(nil, LegacyUnixDomainSocket, grpcServer.caService)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacyGRPCServer.startUnixListener()
 
 	httpHost := httpListen.Addr().String()
-	httpServer := createHTTPServer(context.Background(), httpHost, grpcServer, legacyGRPCServer)
+	httpServer := createHTTPServer(context.Background(), httpHost, grpcServer)
 	go func() {
 		_ = httpServer.Serve(httpListen)
 		grpcServer.GracefulStop()
@@ -130,7 +125,7 @@ func TestHTTPCORSSupport(t *testing.T) {
 	httpServer, host := setupHTTPServer(t)
 	defer httpServer.Close()
 
-	url, _ := url.Parse(host + "/api/v2/trustBundle")
+	url, _ := url.Parse(host + "/api/v3/configuration")
 	req := http.Request{
 		Method: "GET",
 		URL:    url,
@@ -152,7 +147,7 @@ func TestHTTPDoesntLeakGRPCHeaders(t *testing.T) {
 	httpServer, host := setupHTTPServer(t)
 	defer httpServer.Close()
 
-	resp, err := http.Get(host + "/api/v2/trustBundle")
+	resp, err := http.Get(host + "/api/v3/configuration")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Error(err)
 	}
@@ -169,7 +164,7 @@ func TestIssue1267(t *testing.T) {
 	httpServer, host := setupHTTPServerWithGRPCTLS(t)
 	defer httpServer.Close()
 
-	url, _ := url.Parse(host + "/api/v1/rootCert")
+	url, _ := url.Parse(host + "/api/v3/configuration")
 	req := http.Request{
 		Method: "GET",
 		URL:    url,
@@ -188,9 +183,6 @@ type TrivialCertificateAuthority struct {
 
 func (tca *TrivialCertificateAuthority) CreateCertificate(context.Context, identity.Principal, crypto.PublicKey) (*ca.CodeSigningCertificate, error) {
 	return nil, errors.New("CreateCertificate always fails for testing")
-}
-func (tca *TrivialCertificateAuthority) TrustBundle(_ context.Context) ([][]*x509.Certificate, error) {
-	return [][]*x509.Certificate{}, nil
 }
 
 func (tca *TrivialCertificateAuthority) Close() error {

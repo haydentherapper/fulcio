@@ -232,7 +232,7 @@ func TestPrincipalFromIDToken(t *testing.T) {
 				}
 				return
 			}
-			if err == nil && test.WantErr {
+			if test.WantErr {
 				t.Fatal("expected error but got none")
 			}
 

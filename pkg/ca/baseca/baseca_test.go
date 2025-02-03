@@ -33,33 +33,6 @@ import (
 	"github.com/sigstore/sigstore/pkg/signature"
 )
 
-func TestBaseCARoot(t *testing.T) {
-	signer, _, err := signature.NewDefaultECDSASignerVerifier()
-	if err != nil {
-		t.Fatalf("unexpected error generating signer: %v", err)
-	}
-
-	rootCert, rootKey, _ := test.GenerateRootCA()
-	subCert, _, _ := test.GenerateSubordinateCA(rootCert, rootKey)
-	certChain := []*x509.Certificate{subCert, rootCert}
-
-	bca := BaseCA{
-		SignerWithChain: &ca.SignerCerts{Certs: certChain, Signer: signer},
-	}
-
-	rootChains, err := bca.TrustBundle(context.TODO())
-	if err != nil {
-		t.Fatalf("unexpected error reading root: %v", err)
-	}
-	if len(rootChains) != 1 {
-		t.Fatalf("unexpected number of chains: %d", len(rootChains))
-	}
-
-	if !reflect.DeepEqual(certChain, rootChains[0]) {
-		t.Fatal("expected cert chains to be equivalent")
-	}
-}
-
 func TestBaseCAGetSignerWithChain(t *testing.T) {
 	signer, _, err := signature.NewDefaultECDSASignerVerifier()
 	if err != nil {

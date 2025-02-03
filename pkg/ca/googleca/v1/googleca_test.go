@@ -16,12 +16,8 @@
 package v1
 
 import (
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -30,7 +26,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/security/privateca/apiv1/privatecapb"
-	"github.com/sigstore/fulcio/pkg/challenges"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"google.golang.org/protobuf/proto"
 )
@@ -38,53 +33,6 @@ import (
 func failErr(t *testing.T, err error) {
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestCheckSignatureECDSA(t *testing.T) {
-
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	failErr(t, err)
-
-	email := "test@gmail.com"
-	if err := challenges.CheckSignature(&priv.PublicKey, []byte("foo"), email); err == nil {
-		t.Fatal("check should have failed")
-	}
-
-	h := sha256.Sum256([]byte(email))
-	signature, err := priv.Sign(rand.Reader, h[:], crypto.SHA256)
-	failErr(t, err)
-
-	if err := challenges.CheckSignature(&priv.PublicKey, signature, email); err != nil {
-		t.Fatal(err)
-	}
-
-	// Try a bad email but "good" signature
-	if err := challenges.CheckSignature(&priv.PublicKey, signature, "bad@email.com"); err == nil {
-		t.Fatal("check should have failed")
-	}
-}
-
-func TestCheckSignatureRSA(t *testing.T) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	failErr(t, err)
-
-	email := "test@gmail.com"
-	if err := challenges.CheckSignature(&priv.PublicKey, []byte("foo"), email); err == nil {
-		t.Fatal("check should have failed")
-	}
-
-	h := sha256.Sum256([]byte(email))
-	signature, err := priv.Sign(rand.Reader, h[:], crypto.SHA256)
-	failErr(t, err)
-
-	if err := challenges.CheckSignature(&priv.PublicKey, signature, email); err != nil {
-		t.Fatal(err)
-	}
-
-	// Try a bad email but "good" signature
-	if err := challenges.CheckSignature(&priv.PublicKey, signature, "bad@email.com"); err == nil {
-		t.Fatal("check should have failed")
 	}
 }
 

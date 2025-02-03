@@ -94,7 +94,7 @@ issue if you need support.
 
 Configuration:
 * `--ca=googleca`
-* `--gcp_private_ca_parent=projects/<project>/locations/<location>/caPools/<CA-pool>`
+* `--gcp-private-ca-parent=projects/<project>/locations/<location>/caPools/<CA-pool>`
 
 Be sure to run `gcloud auth application-default login` before `docker-compose up` so that
 your credentials are mounted on the container.

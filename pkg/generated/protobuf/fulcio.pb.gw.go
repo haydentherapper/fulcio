@@ -59,24 +59,6 @@ func local_request_CA_CreateSigningCertificate_0(ctx context.Context, marshaler 
 	return msg, metadata, err
 }
 
-func request_CA_GetTrustBundle_0(ctx context.Context, marshaler runtime.Marshaler, client CAClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq GetTrustBundleRequest
-		metadata runtime.ServerMetadata
-	)
-	msg, err := client.GetTrustBundle(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_CA_GetTrustBundle_0(ctx context.Context, marshaler runtime.Marshaler, server CAServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq GetTrustBundleRequest
-		metadata runtime.ServerMetadata
-	)
-	msg, err := server.GetTrustBundle(ctx, &protoReq)
-	return msg, metadata, err
-}
-
 func request_CA_GetConfiguration_0(ctx context.Context, marshaler runtime.Marshaler, client CAClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq GetConfigurationRequest
@@ -107,7 +89,7 @@ func RegisterCAHandlerServer(ctx context.Context, mux *runtime.ServeMux, server 
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/CreateSigningCertificate", runtime.WithHTTPPathPattern("/api/v2/signingCert"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/dev.sigstore.fulcio.v3.CA/CreateSigningCertificate", runtime.WithHTTPPathPattern("/api/v3/signingCert"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -121,33 +103,13 @@ func RegisterCAHandlerServer(ctx context.Context, mux *runtime.ServeMux, server 
 		}
 		forward_CA_CreateSigningCertificate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_CA_GetTrustBundle_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/GetTrustBundle", runtime.WithHTTPPathPattern("/api/v2/trustBundle"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_CA_GetTrustBundle_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_CA_GetTrustBundle_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
 	mux.Handle(http.MethodGet, pattern_CA_GetConfiguration_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/GetConfiguration", runtime.WithHTTPPathPattern("/api/v2/configuration"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/dev.sigstore.fulcio.v3.CA/GetConfiguration", runtime.WithHTTPPathPattern("/api/v3/configuration"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -205,7 +167,7 @@ func RegisterCAHandlerClient(ctx context.Context, mux *runtime.ServeMux, client 
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/CreateSigningCertificate", runtime.WithHTTPPathPattern("/api/v2/signingCert"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/dev.sigstore.fulcio.v3.CA/CreateSigningCertificate", runtime.WithHTTPPathPattern("/api/v3/signingCert"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -218,28 +180,11 @@ func RegisterCAHandlerClient(ctx context.Context, mux *runtime.ServeMux, client 
 		}
 		forward_CA_CreateSigningCertificate_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_CA_GetTrustBundle_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/GetTrustBundle", runtime.WithHTTPPathPattern("/api/v2/trustBundle"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_CA_GetTrustBundle_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_CA_GetTrustBundle_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
 	mux.Handle(http.MethodGet, pattern_CA_GetConfiguration_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/dev.sigstore.fulcio.v2.CA/GetConfiguration", runtime.WithHTTPPathPattern("/api/v2/configuration"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/dev.sigstore.fulcio.v3.CA/GetConfiguration", runtime.WithHTTPPathPattern("/api/v3/configuration"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -256,13 +201,11 @@ func RegisterCAHandlerClient(ctx context.Context, mux *runtime.ServeMux, client 
 }
 
 var (
-	pattern_CA_CreateSigningCertificate_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"api", "v2", "signingCert"}, ""))
-	pattern_CA_GetTrustBundle_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"api", "v2", "trustBundle"}, ""))
-	pattern_CA_GetConfiguration_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"api", "v2", "configuration"}, ""))
+	pattern_CA_CreateSigningCertificate_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"api", "v3", "signingCert"}, ""))
+	pattern_CA_GetConfiguration_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"api", "v3", "configuration"}, ""))
 )
 
 var (
 	forward_CA_CreateSigningCertificate_0 = runtime.ForwardResponseMessage
-	forward_CA_GetTrustBundle_0           = runtime.ForwardResponseMessage
 	forward_CA_GetConfiguration_0         = runtime.ForwardResponseMessage
 )

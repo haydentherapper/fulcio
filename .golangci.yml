@@ -34,11 +34,6 @@ issues:
       linters:
         - errcheck
         - gosec
-    # the following section is due to the legacy API being deprecated
-    - path: pkg/server/legacy_server.go
-      linters:
-        - staticcheck
-      text: SA1019
     - path: pkg/ca/tinkca/signer.go
       linters:
         - staticcheck

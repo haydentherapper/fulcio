@@ -236,7 +236,6 @@ func (fc *FulcioConfig) ToIssuers() []*fulciogrpc.OIDCIssuer {
 			Issuer:            &fulciogrpc.OIDCIssuer_IssuerUrl{IssuerUrl: cfgIss.IssuerURL},
 			Audience:          cfgIss.ClientID,
 			SpiffeTrustDomain: cfgIss.SPIFFETrustDomain,
-			ChallengeClaim:    issuerToChallengeClaim(cfgIss.Type, cfgIss.ChallengeClaim),
 			IssuerType:        cfgIss.Type.String(),
 			SubjectDomain:     cfgIss.SubjectDomain,
 		}
@@ -248,7 +247,6 @@ func (fc *FulcioConfig) ToIssuers() []*fulciogrpc.OIDCIssuer {
 			Issuer:            &fulciogrpc.OIDCIssuer_WildcardIssuerUrl{WildcardIssuerUrl: metaIss},
 			Audience:          cfgIss.ClientID,
 			SpiffeTrustDomain: cfgIss.SPIFFETrustDomain,
-			ChallengeClaim:    issuerToChallengeClaim(cfgIss.Type, cfgIss.ChallengeClaim),
 			IssuerType:        cfgIss.Type.String(),
 			SubjectDomain:     cfgIss.SubjectDomain,
 		}
@@ -313,17 +311,13 @@ func (it IssuerType) String() string {
 }
 
 const (
-	IssuerTypeBuildkiteJob      = "buildkite-job"
-	IssuerTypeEmail             = "email"
-	IssuerTypeGithubWorkflow    = "github-workflow"
-	IssuerTypeCodefreshWorkflow = "codefresh-workflow"
-	IssuerTypeGitLabPipeline    = "gitlab-pipeline"
-	IssuerTypeChainguard        = "chainguard-identity"
-	IssuerTypeKubernetes        = "kubernetes"
-	IssuerTypeSpiffe            = "spiffe"
-	IssuerTypeURI               = "uri"
-	IssuerTypeUsername          = "username"
-	IssuerTypeCIProvider        = "ci-provider"
+	IssuerTypeEmail      = "email"
+	IssuerTypeChainguard = "chainguard-identity"
+	IssuerTypeKubernetes = "kubernetes"
+	IssuerTypeSpiffe     = "spiffe"
+	IssuerTypeURI        = "uri"
+	IssuerTypeUsername   = "username"
+	IssuerTypeCIProvider = "ci-provider"
 )
 
 func parseConfig(b []byte) (cfg *FulcioConfig, err error) {
@@ -446,11 +440,6 @@ var DefaultConfig = &FulcioConfig{
 			IssuerURL: "https://accounts.google.com",
 			ClientID:  "sigstore",
 			Type:      IssuerTypeEmail,
-		},
-		"https://token.actions.githubusercontent.com": {
-			IssuerURL: "https://token.actions.githubusercontent.com",
-			ClientID:  "sigstore",
-			Type:      IssuerTypeGithubWorkflow,
 		},
 	},
 }
@@ -576,17 +565,9 @@ func issuerToChallengeClaim(issType IssuerType, challengeClaim string) string {
 		return challengeClaim
 	}
 	switch issType {
-	case IssuerTypeBuildkiteJob:
-		return "sub"
-	case IssuerTypeGitLabPipeline:
-		return "sub"
 	case IssuerTypeEmail:
 		return "email"
-	case IssuerTypeGithubWorkflow:
-		return "sub"
 	case IssuerTypeCIProvider:
-		return "sub"
-	case IssuerTypeCodefreshWorkflow:
 		return "sub"
 	case IssuerTypeChainguard:
 		return "sub"

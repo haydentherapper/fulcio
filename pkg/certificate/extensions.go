@@ -53,6 +53,10 @@ var (
 	OIDBuildTrigger                        = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 20}
 	OIDRunInvocationURI                    = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 21}
 	OIDSourceRepositoryVisibilityAtSigning = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 22}
+
+	OIDCertificateVersion = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 100}
+	OIDArtifactDigest     = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 101}
+	// OIDSubjectHash        = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, 102}
 )
 
 // Extensions contains all custom x509 extensions defined by Fulcio
@@ -132,54 +136,17 @@ type Extensions struct {
 
 	// Source repository visibility at the time of signing the certificate.
 	SourceRepositoryVisibilityAtSigning string `json:"SourceRepositoryVisibilityAtSigning,omitempty" yaml:"source-repository-visibility-at-signing,omitempty"` // 1.3.6.1.4.1.57264.1.22
+
+	// Convenience to clients to know which extensions are present in the certificate
+	CertificateVersion string // 1.3.6.1.4.1.57264.1.100
+
+	// Digest of to-be-signed artifact, to prevent reuse of certificate
+	ArtifactDigest string // 1.3.6.1.4.1.57264.1.101
 }
 
 func (e Extensions) Render() ([]pkix.Extension, error) {
 	var exts []pkix.Extension
 
-	// BEGIN: Deprecated
-	if e.Issuer != "" {
-		// deprecated issuer extension due to incorrect encoding
-		exts = append(exts, pkix.Extension{
-			Id:    OIDIssuer,
-			Value: []byte(e.Issuer),
-		})
-	} else {
-		return nil, errors.New("extensions must have a non-empty issuer url")
-	}
-	if e.GithubWorkflowTrigger != "" {
-		exts = append(exts, pkix.Extension{
-			Id:    OIDGitHubWorkflowTrigger,
-			Value: []byte(e.GithubWorkflowTrigger),
-		})
-	}
-	if e.GithubWorkflowSHA != "" {
-		exts = append(exts, pkix.Extension{
-			Id:    OIDGitHubWorkflowSHA,
-			Value: []byte(e.GithubWorkflowSHA),
-		})
-	}
-	if e.GithubWorkflowName != "" {
-		exts = append(exts, pkix.Extension{
-			Id:    OIDGitHubWorkflowName,
-			Value: []byte(e.GithubWorkflowName),
-		})
-	}
-	if e.GithubWorkflowRepository != "" {
-		exts = append(exts, pkix.Extension{
-			Id:    OIDGitHubWorkflowRepository,
-			Value: []byte(e.GithubWorkflowRepository),
-		})
-	}
-	if e.GithubWorkflowRef != "" {
-		exts = append(exts, pkix.Extension{
-			Id:    OIDGitHubWorkflowRef,
-			Value: []byte(e.GithubWorkflowRef),
-		})
-	}
-	// END: Deprecated
-
-	// duplicate issuer with correct RFC 5280 encoding
 	if e.Issuer != "" {
 		// construct DER encoding of issuer string
 		val, err := asn1.MarshalWithParams(e.Issuer, "utf8")
@@ -335,6 +302,27 @@ func (e Extensions) Render() ([]pkix.Extension, error) {
 		})
 	}
 
+	// Certificate version
+	val, err := asn1.MarshalWithParams("v2", "utf8")
+	if err != nil {
+		return nil, err
+	}
+	exts = append(exts, pkix.Extension{
+		Id:    OIDCertificateVersion,
+		Value: val,
+	})
+
+	if e.ArtifactDigest != "" {
+		val, err := asn1.MarshalWithParams(e.ArtifactDigest, "utf8")
+		if err != nil {
+			return nil, err
+		}
+		exts = append(exts, pkix.Extension{
+			Id:    OIDArtifactDigest,
+			Value: val,
+		})
+	}
+
 	return exts, nil
 }
 
@@ -343,20 +331,6 @@ func ParseExtensions(ext []pkix.Extension) (Extensions, error) {
 
 	for _, e := range ext {
 		switch {
-		// BEGIN: Deprecated
-		case e.Id.Equal(OIDIssuer):
-			out.Issuer = string(e.Value)
-		case e.Id.Equal(OIDGitHubWorkflowTrigger):
-			out.GithubWorkflowTrigger = string(e.Value)
-		case e.Id.Equal(OIDGitHubWorkflowSHA):
-			out.GithubWorkflowSHA = string(e.Value)
-		case e.Id.Equal(OIDGitHubWorkflowName):
-			out.GithubWorkflowName = string(e.Value)
-		case e.Id.Equal(OIDGitHubWorkflowRepository):
-			out.GithubWorkflowRepository = string(e.Value)
-		case e.Id.Equal(OIDGitHubWorkflowRef):
-			out.GithubWorkflowRef = string(e.Value)
-		// END: Deprecated
 		case e.Id.Equal(OIDIssuerV2):
 			if err := ParseDERString(e.Value, &out.Issuer); err != nil {
 				return Extensions{}, err
@@ -415,6 +389,14 @@ func ParseExtensions(ext []pkix.Extension) (Extensions, error) {
 			}
 		case e.Id.Equal(OIDSourceRepositoryVisibilityAtSigning):
 			if err := ParseDERString(e.Value, &out.SourceRepositoryVisibilityAtSigning); err != nil {
+				return Extensions{}, err
+			}
+		case e.Id.Equal(OIDCertificateVersion):
+			if err := ParseDERString(e.Value, &out.CertificateVersion); err != nil {
+				return Extensions{}, err
+			}
+		case e.Id.Equal(OIDArtifactDigest):
+			if err := ParseDERString(e.Value, &out.ArtifactDigest); err != nil {
 				return Extensions{}, err
 			}
 		}

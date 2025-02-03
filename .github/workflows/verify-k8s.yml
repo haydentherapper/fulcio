@@ -136,7 +136,7 @@ jobs:
               fileca-key: /etc/fulcio-secret/key.pem
               fileca-key-passwd: "${{ github.run_id }}"
               ct-log-url: ""
-              log_type: prod
+              log-type: prod
           EOF
           # Create secret needed to use fileca
           cat <<EOF > config/fulcio-secret.yaml

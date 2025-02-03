@@ -17,8 +17,6 @@ package server
 
 import (
 	"context"
-	"crypto"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -30,12 +28,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	certauth "github.com/sigstore/fulcio/pkg/ca"
-	"github.com/sigstore/fulcio/pkg/challenges"
 	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/ctl"
 	fulciogrpc "github.com/sigstore/fulcio/pkg/generated/protobuf"
 	"github.com/sigstore/fulcio/pkg/identity"
-	"github.com/sigstore/fulcio/pkg/log"
+	fulciorequest "github.com/sigstore/fulcio/pkg/request"
 	"github.com/sigstore/sigstore/pkg/cryptoutils"
 )
 
@@ -53,7 +50,9 @@ func NewGRPCCAServer(ct *ctclient.LogClient, ca certauth.CertificateAuthority, i
 }
 
 const (
-	MetadataOIDCTokenKey = "oidcidentitytoken"
+	MetadataOIDCTokenKey        = "oidcidentitytoken"
+	HTTPResponseCodeMetadataKey = "x-http-code"
+	PEMCertificateChain         = "application/pem-certificate-chain"
 )
 
 type grpcaCAServer struct {
@@ -64,14 +63,8 @@ type grpcaCAServer struct {
 }
 
 func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *fulciogrpc.CreateSigningCertificateRequest) (*fulciogrpc.SigningCertificate, error) {
-	logger := log.ContextLogger(ctx)
-
 	// OIDC token either is passed in gRPC field or was extracted from HTTP headers
-	token := ""
-	if request.Credentials != nil {
-		token = request.Credentials.GetOidcIdentityToken()
-	}
-
+	token := request.GetOidcIdentityToken()
 	if token == "" {
 		if md, ok := metadata.FromIncomingContext(ctx); ok {
 			vals := md.Get(MetadataOIDCTokenKey)
@@ -87,88 +80,37 @@ func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *f
 		return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidIdentityToken)
 	}
 
-	var publicKey crypto.PublicKey
-	// Verify caller is in possession of their private key and extract
-	// public key from request.
-	if len(request.GetCertificateSigningRequest()) > 0 {
-		// Option 1: Verify CSR
-		csr, err := cryptoutils.ParseCSR(request.GetCertificateSigningRequest())
-		if err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidCSR)
-		}
-
-		// Parse public key and check for weak key parameters
-		publicKey = csr.PublicKey
-		if err := cryptoutils.ValidatePubKey(publicKey); err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, insecurePublicKey)
-		}
-
-		if err := csr.CheckSignature(); err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidSignature)
-		}
-	} else {
-		// Option 2: Check the signature for proof of possession of a private key
-		var (
-			pubKeyContent     string
-			proofOfPossession []byte
-			err               error
-		)
-		if request.GetPublicKeyRequest() != nil {
-			if request.GetPublicKeyRequest().PublicKey != nil {
-				pubKeyContent = request.GetPublicKeyRequest().PublicKey.Content
-			}
-			proofOfPossession = request.GetPublicKeyRequest().ProofOfPossession
-		}
-
-		// Parse public key and check for weak parameters
-		publicKey, err = challenges.ParsePublicKey(pubKeyContent)
-		if err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidPublicKey)
-		}
-		if err := cryptoutils.ValidatePubKey(publicKey); err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, insecurePublicKey)
-		}
-
-		// Check proof of possession signature
-		if err := challenges.CheckSignature(publicKey, proofOfPossession, principal.Name(ctx)); err != nil {
-			return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidSignature)
-		}
+	// Verify CSR, extract public key, and compare subjects
+	csr, err := cryptoutils.ParseCSR(request.GetCertificateSigningRequest())
+	if err != nil {
+		return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidCSR)
 	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, invalidSignature)
+	}
+	// Check for weak key parameters
+	if err := cryptoutils.ValidatePubKey(csr.PublicKey); err != nil {
+		return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, insecurePublicKey)
+	}
+	// TODO: Finish implementing
+	ctx = fulciorequest.WithArtifactDigest(ctx, request.GetArtifactDigest())
 
-	var csc *certauth.CodeSigningCertificate
-	var sctBytes []byte
+	// TODO: Add Subject comparison for CSR, figure out which ext should contain identity and what identity
+
 	result := &fulciogrpc.SigningCertificate{}
+
 	// For CAs that do not support embedded SCTs or if the CT log is not configured
 	if sctCa, ok := g.ca.(certauth.EmbeddedSCTCA); !ok || g.ct == nil {
 		// currently configured CA doesn't support pre-certificate flow required to embed SCT in final certificate
-		csc, err = g.ca.CreateCertificate(ctx, principal, publicKey)
+		csc, err := g.ca.CreateCertificate(ctx, principal, csr.PublicKey)
 		if err != nil {
 			// if the error was due to invalid input in the request, return HTTP 400
 			if _, ok := err.(certauth.ValidationError); ok {
 				return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, err.Error())
 			}
-			err = fmt.Errorf("Error creating certificate: %w", err)
+			err = fmt.Errorf("error creating certificate: %w", err)
 			// otherwise return a 500 error to reflect that it is a transient server issue that the client can't resolve
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, genericCAError)
-		}
-
-		// Submit to CTL
-		if g.ct != nil {
-			sct, err := g.ct.AddChain(ctx, ctl.BuildCTChain(csc.FinalCertificate, csc.FinalChain))
-			if err != nil {
-				return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToEnterCertInCTL)
-			}
-			// convert to AddChainResponse because Cosign expects this struct.
-			addChainResp, err := ctl.ToAddChainResponse(sct)
-			if err != nil {
-				return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToMarshalSCT)
-			}
-			sctBytes, err = json.Marshal(addChainResp)
-			if err != nil {
-				return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToMarshalSCT)
-			}
-		} else {
-			logger.Info("Skipping CT log upload.")
 		}
 
 		finalPEM, err := csc.CertPEM()
@@ -181,24 +123,15 @@ func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *f
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToMarshalCert)
 		}
 
-		result.Certificate = &fulciogrpc.SigningCertificate_SignedCertificateDetachedSct{
-			SignedCertificateDetachedSct: &fulciogrpc.SigningCertificateDetachedSCT{
-				Chain: &fulciogrpc.CertificateChain{
-					Certificates: append([]string{finalPEM}, finalChainPEM...),
-				},
-			},
-		}
-		if len(sctBytes) > 0 {
-			result.GetSignedCertificateDetachedSct().SignedCertificateTimestamp = sctBytes
-		}
+		result.Certificates = append([]string{finalPEM}, finalChainPEM...)
 	} else {
-		precert, err := sctCa.CreatePrecertificate(ctx, principal, publicKey)
+		precert, err := sctCa.CreatePrecertificate(ctx, principal, csr.PublicKey)
 		if err != nil {
 			// if the error was due to invalid input in the request, return HTTP 400
 			if _, ok := err.(certauth.ValidationError); ok {
 				return nil, handleFulcioGRPCError(ctx, codes.InvalidArgument, err, err.Error())
 			}
-			err = fmt.Errorf("Error creating a pre-certificate and chain: %w", err)
+			err = fmt.Errorf("error creating a pre-certificate and chain: %w", err)
 			// otherwise return a 500 error to reflect that it is a transient server issue that the client can't resolve
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, genericCAError)
 		}
@@ -207,9 +140,9 @@ func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *f
 		if err != nil {
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToEnterCertInCTL)
 		}
-		csc, err = sctCa.IssueFinalCertificate(ctx, precert, sct)
+		csc, err := sctCa.IssueFinalCertificate(ctx, precert, sct)
 		if err != nil {
-			err = fmt.Errorf("Error issuing final certificate using the pre-certificate with CA backend: %w", err)
+			err = fmt.Errorf("error issuing final certificate using the pre-certificate with CA backend: %w", err)
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, genericCAError)
 		}
 
@@ -217,48 +150,17 @@ func (g *grpcaCAServer) CreateSigningCertificate(ctx context.Context, request *f
 		if err != nil {
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToMarshalCert)
 		}
-
 		finalChainPEM, err := csc.ChainPEM()
 		if err != nil {
 			return nil, handleFulcioGRPCError(ctx, codes.Internal, err, failedToMarshalCert)
 		}
 
-		result.Certificate = &fulciogrpc.SigningCertificate_SignedCertificateEmbeddedSct{
-			SignedCertificateEmbeddedSct: &fulciogrpc.SigningCertificateEmbeddedSCT{
-				Chain: &fulciogrpc.CertificateChain{
-					Certificates: append([]string{finalPEM}, finalChainPEM...),
-				},
-			},
-		}
+		result.Certificates = append([]string{finalPEM}, finalChainPEM...)
 	}
 
 	metricNewEntries.Inc()
 
 	return result, nil
-}
-
-func (g *grpcaCAServer) GetTrustBundle(ctx context.Context, _ *fulciogrpc.GetTrustBundleRequest) (*fulciogrpc.TrustBundle, error) {
-	trustBundle, err := g.ca.TrustBundle(ctx)
-	if err != nil {
-		return nil, handleFulcioGRPCError(ctx, codes.Internal, err, retrieveTrustBundleCAError)
-	}
-
-	resp := &fulciogrpc.TrustBundle{
-		Chains: []*fulciogrpc.CertificateChain{},
-	}
-
-	for _, chain := range trustBundle {
-		certChain := &fulciogrpc.CertificateChain{}
-		for _, cert := range chain {
-			certPEM, err := cryptoutils.MarshalCertificateToPEM(cert)
-			if err != nil {
-				return nil, handleFulcioGRPCError(ctx, codes.Internal, err, marshalingCertificateChainBundleCAError)
-			}
-			certChain.Certificates = append(certChain.Certificates, string(certPEM))
-		}
-		resp.Chains = append(resp.Chains, certChain)
-	}
-	return resp, nil
 }
 
 func (g *grpcaCAServer) GetConfiguration(ctx context.Context, _ *fulciogrpc.GetConfigurationRequest) (*fulciogrpc.Configuration, error) {

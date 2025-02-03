@@ -53,7 +53,6 @@ import (
 	"github.com/sigstore/fulcio/pkg/ca/tinkca"
 	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/generated/protobuf"
-	"github.com/sigstore/fulcio/pkg/generated/protobuf/legacy"
 	"github.com/sigstore/fulcio/pkg/identity"
 	"github.com/sigstore/fulcio/pkg/log"
 	"github.com/sigstore/fulcio/pkg/server"
@@ -83,10 +82,10 @@ func newServeCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&serveCmdConfigFilePath, "config", "c", "", "config file containing all settings")
-	cmd.Flags().String("log_type", "dev", "logger type to use (dev/prod)")
+	cmd.Flags().String("log-type", "dev", "logger type to use (dev/prod)")
 	cmd.Flags().String("ca", "", "googleca | tinkca | pkcs11ca | fileca | kmsca | ephemeralca (for testing)")
 	cmd.Flags().String("aws-hsm-root-ca-path", "", "Path to root CA on disk (only used with AWS HSM)")
-	cmd.Flags().String("gcp_private_ca_parent", "", "private ca parent: projects/<project>/locations/<location>/caPools/<caPool> (only used with --ca googleca)"+
+	cmd.Flags().String("gcp-private-ca-parent", "", "private ca parent: projects/<project>/locations/<location>/caPools/<caPool> (only used with --ca googleca)"+
 		"Optionally specify /certificateAuthorities/<caID>, which will bypass CA pool load balancing.")
 	cmd.Flags().String("hsm-caroot-id", "", "HSM ID for Root CA (only used with --ca pkcs11ca)")
 	cmd.Flags().String("ct-log-url", "http://localhost:6962/test", "host and path (with log prefix at the end) to the ct log")
@@ -107,7 +106,6 @@ func newServeCmd() *cobra.Command {
 	cmd.Flags().String("grpc-host", "0.0.0.0", "The host on which to serve requests for GRPC")
 	cmd.Flags().String("grpc-port", "8081", "The port on which to serve requests for GRPC")
 	cmd.Flags().String("metrics-port", "2112", "The port on which to serve prometheus metrics endpoint")
-	cmd.Flags().String("legacy-unix-domain-socket", LegacyUnixDomainSocket, "The Unix domain socket used for the legacy gRPC server")
 	cmd.Flags().Duration("read-header-timeout", 10*time.Second, "The time allowed to read the headers of the requests in seconds")
 	cmd.Flags().String("grpc-tls-certificate", "", "the certificate file to use for secure connections - only applies to grpc-port")
 	cmd.Flags().String("grpc-tls-key", "", "the private key file to use for secure connections (without passphrase) - only applies to grpc-port")
@@ -168,12 +166,8 @@ func runServeCmd(cmd *cobra.Command, args []string) { //nolint: revive
 		}
 
 	case "googleca":
-		if !viper.IsSet("gcp_private_ca_parent") {
-			log.Logger.Fatal("gcp_private_ca_parent must be set when using googleca")
-		}
-		if viper.IsSet("gcp_private_ca_version") {
-			// There's a MarkDeprecated function in cobra/pflags, but it doesn't use log.Logger
-			log.Logger.Warn("gcp_private_ca_version is deprecated and will soon be removed; please remove it")
+		if !viper.IsSet("gcp-private-ca-parent") {
+			log.Logger.Fatal("gcp-private-ca-parent must be set when using googleca")
 		}
 	case "fileca":
 		if !viper.IsSet("fileca-cert") {
@@ -209,7 +203,7 @@ func runServeCmd(cmd *cobra.Command, args []string) { //nolint: revive
 	}
 
 	// Setup the logger to dev/prod
-	log.ConfigureLogger(viper.GetString("log_type"))
+	log.ConfigureLogger(viper.GetString("log-type"))
 
 	// from https://github.com/golang/glog/commit/fca8c8854093a154ff1eb580aae10276ad6b1b5f
 	_ = flag.CommandLine.Parse([]string{})
@@ -230,7 +224,7 @@ func runServeCmd(cmd *cobra.Command, args []string) { //nolint: revive
 	var baseca certauth.CertificateAuthority
 	switch viper.GetString("ca") {
 	case "googleca":
-		baseca, err = googlecav1.NewCertAuthorityService(cmd.Context(), viper.GetString("gcp_private_ca_parent"))
+		baseca, err = googlecav1.NewCertAuthorityService(cmd.Context(), viper.GetString("gcp-private-ca-parent"))
 	case "pkcs11ca":
 		params := pkcs11ca.Params{
 			ConfigPath: viper.GetString("pkcs11-config-path"),
@@ -344,13 +338,7 @@ func runServeCmd(cmd *cobra.Command, args []string) { //nolint: revive
 	grpcServer.setupPrometheus(reg)
 	grpcServer.startTCPListener(&wg)
 
-	legacyGRPCServer, err := createLegacyGRPCServer(cfg, viper.GetString("legacy-unix-domain-socket"), grpcServer.caService)
-	if err != nil {
-		log.Logger.Fatal(err)
-	}
-	legacyGRPCServer.startUnixListener()
-
-	httpServer := createHTTPServer(ctx, httpServerEndpoint, grpcServer, legacyGRPCServer)
+	httpServer := createHTTPServer(ctx, httpServerEndpoint, grpcServer)
 	httpServer.startListener(&wg)
 
 	readHeaderTimeout := viper.GetDuration("read-header-timeout")
@@ -441,13 +429,6 @@ func StartDuplexServer(ctx context.Context, cfg *config.FulcioConfig, ctClient *
 	protobuf.RegisterCAServer(d.Server, grpcCAServer)
 	if err := d.RegisterHandler(ctx, protobuf.RegisterCAHandlerFromEndpoint); err != nil {
 		return fmt.Errorf("registering grpc ca handler: %w", err)
-	}
-
-	// Legacy server
-	legacyGRPCCAServer := server.NewLegacyGRPCCAServer(grpcCAServer)
-	legacy.RegisterCAServer(d.Server, legacyGRPCCAServer)
-	if err := d.RegisterHandler(ctx, legacy.RegisterCAHandlerFromEndpoint); err != nil {
-		return fmt.Errorf("registering legacy grpc ca handler: %w", err)
 	}
 
 	// Prometheus

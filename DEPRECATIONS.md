@@ -8,4 +8,5 @@ You can read more about Sigstore's deprecation policy [here](https://docs.sigsto
 | My feature                   | Experimental/Beta/GA    | DD/MM/YY                     |
 |------------------------------|-------------------------|------------------------------|
 | Legacy (V1) API              | Beta                    | 01/02/23                     |
+| V2 API                       | GA                      | 02/01/25                     |
 |                              |                         |                              |

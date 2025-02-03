@@ -31,18 +31,13 @@ func TestExtensions(t *testing.T) {
 	}{
 		`Missing issuer extension leads to render error`: {
 			Extensions: Extensions{
-				GithubWorkflowTrigger: `foo`,
+				BuildSignerURI: `foo`,
 			},
 			WantErr: true,
 		},
 		`complete extensions list should create all extensions with correct OIDs`: {
 			Extensions: Extensions{
 				Issuer:                              "issuer", // OID 1.3.6.1.4.1.57264.1.1 and 1.3.6.1.4.1.57264.1.8
-				GithubWorkflowTrigger:               "2",      // OID 1.3.6.1.4.1.57264.1.2
-				GithubWorkflowSHA:                   "3",      // OID 1.3.6.1.4.1.57264.1.3
-				GithubWorkflowName:                  "4",      // OID 1.3.6.1.4.1.57264.1.4
-				GithubWorkflowRepository:            "5",      // OID 1.3.6.1.4.1.57264.1.5
-				GithubWorkflowRef:                   "6",      // 1.3.6.1.4.1.57264.1.6
 				BuildSignerURI:                      "9",      // 1.3.6.1.4.1.57264.1.9
 				BuildSignerDigest:                   "10",     // 1.3.6.1.4.1.57264.1.10
 				RunnerEnvironment:                   "11",     // 1.3.6.1.4.1.57264.1.11
@@ -57,32 +52,10 @@ func TestExtensions(t *testing.T) {
 				BuildTrigger:                        "20",     // 1.3.6.1.4.1.57264.1.20
 				RunInvocationURI:                    "21",     // 1.3.6.1.4.1.57264.1.21
 				SourceRepositoryVisibilityAtSigning: "22",     // 1.3.6.1.4.1.57264.1.22
+				CertificateVersion:                  "v2",     // 1.3.6.1.4.1.57264.1.100
+				ArtifactDigest:                      "hash",   // 1.3.6.1.4.1.57264.1.101
 			},
 			Expect: []pkix.Extension{
-				{
-					Id:    OIDIssuer,
-					Value: []byte("issuer"),
-				},
-				{
-					Id:    OIDGitHubWorkflowTrigger,
-					Value: []byte("2"),
-				},
-				{
-					Id:    OIDGitHubWorkflowSHA,
-					Value: []byte("3"),
-				},
-				{
-					Id:    OIDGitHubWorkflowName,
-					Value: []byte("4"),
-				},
-				{
-					Id:    OIDGitHubWorkflowRepository,
-					Value: []byte("5"),
-				},
-				{
-					Id:    OIDGitHubWorkflowRef,
-					Value: []byte("6"),
-				},
 				{
 					Id:    OIDIssuerV2,
 					Value: marshalDERString(t, "issuer"),
@@ -142,6 +115,14 @@ func TestExtensions(t *testing.T) {
 				{
 					Id:    OIDSourceRepositoryVisibilityAtSigning,
 					Value: marshalDERString(t, "22"),
+				},
+				{
+					Id:    OIDCertificateVersion,
+					Value: marshalDERString(t, "v2"),
+				},
+				{
+					Id:    OIDArtifactDigest,
+					Value: marshalDERString(t, "hash"),
 				},
 			},
 			WantErr: false,

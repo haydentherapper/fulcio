@@ -24,19 +24,15 @@ import (
 )
 
 const (
-	invalidSignature       = "The signature supplied in the request could not be verified"
-	invalidPublicKey       = "The public key supplied in the request could not be parsed"
-	invalidCSR             = "The certificate signing request could not be parsed"
-	failedToEnterCertInCTL = "Error entering certificate in CTL"
-	failedToMarshalSCT     = "Error marshaling signed certificate timestamp"
-	failedToMarshalCert    = "Error marshaling code signing certificate"
-	insecurePublicKey      = "The public key supplied in the request is insecure"
-	//nolint
-	invalidCredentials = "There was an error processing the credentials for this request"
-	// nolint
+	invalidSignature                        = "The signature supplied in the request could not be verified"
+	invalidPublicKey                        = "The public key supplied in the request could not be parsed"
+	invalidCSR                              = "The certificate signing request could not be parsed"
+	failedToEnterCertInCTL                  = "Error entering certificate in CTL"
+	failedToMarshalSCT                      = "Error marshaling signed certificate timestamp"
+	failedToMarshalCert                     = "Error marshaling code signing certificate"
+	insecurePublicKey                       = "The public key supplied in the request is insecure"
 	invalidIdentityToken                    = "There was an error processing the identity token"
 	genericCAError                          = "error communicating with CA backend"
-	retrieveTrustBundleCAError              = "error retrieving trust bundle from CA backend"
 	marshalingCertificateChainBundleCAError = "error marshaling the certificate chain of the bundle"
 	loadingFulcioConfigurationError         = "error loading fulcio configuration"
 )

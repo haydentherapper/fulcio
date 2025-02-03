@@ -508,20 +508,8 @@ func Test_issuerToChallengeClaim(t *testing.T) {
 	if claim := issuerToChallengeClaim(IssuerTypeURI, ""); claim != "sub" {
 		t.Fatalf("expected sub subject claim for URI issuer, got %s", claim)
 	}
-	if claim := issuerToChallengeClaim(IssuerTypeBuildkiteJob, ""); claim != "sub" {
-		t.Fatalf("expected sub subject claim for Buildkite issuer, got %s", claim)
-	}
-	if claim := issuerToChallengeClaim(IssuerTypeGithubWorkflow, ""); claim != "sub" {
-		t.Fatalf("expected sub subject claim for GitHub issuer, got %s", claim)
-	}
 	if claim := issuerToChallengeClaim(IssuerTypeCIProvider, ""); claim != "sub" {
 		t.Fatalf("expected sub subject claim for CI issuer, got %s", claim)
-	}
-	if claim := issuerToChallengeClaim(IssuerTypeGitLabPipeline, ""); claim != "sub" {
-		t.Fatalf("expected sub subject claim for GitLab issuer, got %s", claim)
-	}
-	if claim := issuerToChallengeClaim(IssuerTypeCodefreshWorkflow, ""); claim != "sub" {
-		t.Fatalf("expected sub subject claim for Codefresh issuer, got %s", claim)
 	}
 	if claim := issuerToChallengeClaim(IssuerTypeChainguard, ""); claim != "sub" {
 		t.Fatalf("expected sub subject claim for Chainguard issuer, got %s", claim)
@@ -562,16 +550,14 @@ func TestToIssuers(t *testing.T) {
 			},
 			want: []*protobuf.OIDCIssuer{
 				{
-					Audience:       "sigstore",
-					ChallengeClaim: "email",
+					Audience: "sigstore",
 					Issuer: &protobuf.OIDCIssuer_IssuerUrl{
 						IssuerUrl: "example.com",
 					},
 					IssuerType: IssuerTypeEmail,
 				},
 				{
-					Audience:       "sigstore",
-					ChallengeClaim: "sub",
+					Audience: "sigstore",
 					Issuer: &protobuf.OIDCIssuer_WildcardIssuerUrl{
 						WildcardIssuerUrl: "wildcard.*.example.com",
 					},
@@ -592,8 +578,7 @@ func TestToIssuers(t *testing.T) {
 			},
 			want: []*protobuf.OIDCIssuer{
 				{
-					Audience:       "sigstore",
-					ChallengeClaim: "sub",
+					Audience: "sigstore",
 					Issuer: &protobuf.OIDCIssuer_IssuerUrl{
 						IssuerUrl: "username.example.com",
 					},
@@ -615,8 +600,7 @@ func TestToIssuers(t *testing.T) {
 			},
 			want: []*protobuf.OIDCIssuer{
 				{
-					Audience:       "sigstore",
-					ChallengeClaim: "sub",
+					Audience: "sigstore",
 					Issuer: &protobuf.OIDCIssuer_IssuerUrl{
 						IssuerUrl: "uriissuer.example.com",
 					},

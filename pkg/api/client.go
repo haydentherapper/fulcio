@@ -17,9 +17,7 @@ package api
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -30,54 +28,54 @@ import (
 )
 
 type CertificateResponse struct {
-	CertPEM  []byte
-	ChainPEM []byte
-	SCT      []byte
+	Certificates []string `json:"certificates"`
 }
 
-type RootResponse struct {
-	ChainPEM []byte
+type ConfigurationResponse struct {
+	Issuers []OIDCIssuer `json:"issuers"`
 }
 
-type Key struct {
-	// +required
-	Content   []byte `json:"content"`
-	Algorithm string `json:"algorithm,omitempty"`
+type OIDCIssuer struct {
+	IssuerURL         string `json:"issuerUrl"`
+	WildcardIssuerURL string `json:"wildcardIssuerUrl"`
+	Audience          string `json:"audience"`
+	SpiffeTrustDomain string `json:"spiffeTrustDomain"`
+	IssuerType        string `json:"issuerType"`
+	SubjectDomain     string `json:"subjectDomain"`
 }
 
 type CertificateRequest struct {
-	// +optional
-	PublicKey Key `json:"publicKey"`
+	CertificateSigningRequest []byte `json:"certificate_signing_request"`
 
 	// +optional
-	SignedEmailAddress []byte `json:"signedEmailAddress"`
+	ArtifactDigest []byte `json:"artifact_digest"`
 
 	// +optional
-	CertificateSigningRequest []byte `json:"certificateSigningRequest"`
+	HashSubject bool `json:"hash_subject"`
 }
 
 const (
-	signingCertPath = "/api/v1/signingCert"
-	rootCertPath    = "/api/v1/rootCert"
+	signingCertPath = "/api/v3/signingCert"
+	configPath      = "/api/v3/configuration"
 )
 
 // SigstorePublicServerURL is the URL of Sigstore's public Fulcio service.
 const SigstorePublicServerURL = "https://fulcio.sigstore.dev"
 
-// LegacyClient is the interface for accessing the Fulcio API.
-type LegacyClient interface {
+// Client is the interface for accessing the Fulcio API.
+type Client interface {
 	// SigningCert sends the provided CertificateRequest to the /api/v1/signingCert
 	// endpoint of a Fulcio API, authenticated with the provided bearer token.
 	SigningCert(cr CertificateRequest, token string) (*CertificateResponse, error)
 	// RootCert sends a request to get the current CA used by Fulcio.
-	RootCert() (*RootResponse, error)
+	Configuration() (*ConfigurationResponse, error)
 }
 
 // ClientOption is a functional option for customizing static signatures.
 type ClientOption func(*clientOptions)
 
 // NewClient creates a new Fulcio API client talking to the provided URL.
-func NewClient(url *url.URL, opts ...ClientOption) LegacyClient {
+func NewClient(url *url.URL, opts ...ClientOption) Client {
 	o := makeOptions(opts...)
 
 	return &client{
@@ -94,7 +92,7 @@ type client struct {
 	client  *http.Client
 }
 
-var _ LegacyClient = (*client)(nil)
+var _ Client = (*client)(nil)
 
 // SigningCert implements Client
 func (c *client) SigningCert(cr CertificateRequest, token string) (*CertificateResponse, error) {
@@ -133,29 +131,17 @@ func (c *client) SigningCert(cr CertificateRequest, token string) (*CertificateR
 		return nil, fmt.Errorf("%s %s returned %s: %q", http.MethodPost, endpoint.String(), resp.Status, body)
 	}
 
-	// Extract the SCT from the response header.
-	sct, err := base64.StdEncoding.DecodeString(resp.Header.Get("SCT"))
-	if err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+	var certResp CertificateResponse
+	if err := json.Unmarshal(body, &certResp); err != nil {
+		return nil, fmt.Errorf("error unmarshaling certificate response: %w", err)
 	}
-
-	// Split the cert and the chain
-	certBlock, chainPem := pem.Decode(body)
-	if certBlock == nil {
-		return nil, errors.New("did not find a cert from Fulcio")
-	}
-	certPem := pem.EncodeToMemory(certBlock)
-	return &CertificateResponse{
-		CertPEM:  certPem,
-		ChainPEM: chainPem,
-		SCT:      sct,
-	}, nil
+	return &certResp, nil
 }
 
-func (c *client) RootCert() (*RootResponse, error) {
+func (c *client) Configuration() (*ConfigurationResponse, error) {
 	// Construct the API endpoint for this handler
 	endpoint := *c.baseURL
-	endpoint.Path = path.Join(endpoint.Path, rootCertPath)
+	endpoint.Path = path.Join(endpoint.Path, configPath)
 
 	req, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
 	if err != nil {
@@ -171,11 +157,15 @@ func (c *client) RootCert() (*RootResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New(string(body))
 	}
-	return &RootResponse{ChainPEM: body}, nil
+
+	var config ConfigurationResponse
+	if err := json.Unmarshal(body, &config); err != nil {
+		return nil, fmt.Errorf("error unmarshaling configuration: %w", err)
+	}
+	return &config, nil
 }
 
 type clientOptions struct {

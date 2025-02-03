@@ -139,11 +139,6 @@ func (bca *BaseCA) CreateCertificate(ctx context.Context, principal identity.Pri
 	return ca.CreateCSCFromDER(finalCertBytes, certChain)
 }
 
-func (bca *BaseCA) TrustBundle(_ context.Context) ([][]*x509.Certificate, error) {
-	certs, _ := bca.GetSignerWithChain()
-	return [][]*x509.Certificate{certs}, nil
-}
-
 func (bca *BaseCA) Close() error {
 	return nil
 }

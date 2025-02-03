@@ -16,21 +16,21 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"log"
 	"net/url"
 
 	fulciopb "github.com/sigstore/fulcio/pkg/generated/protobuf"
-	"github.com/sigstore/sigstore/pkg/cryptoutils"
 	"github.com/sigstore/sigstore/pkg/oauthflow"
-	"github.com/sigstore/sigstore/pkg/signature"
-	"github.com/sigstore/sigstore/pkg/signature/options"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -42,39 +42,25 @@ var (
 	oidcClientID = "sigstore"
 )
 
-// Some of this is just ripped from cosign
-func GetCert(signer *signature.ECDSASignerVerifier, fc fulciopb.CAClient, oidcIssuer string, oidcClientID string) (*fulciopb.SigningCertificate, error) {
-
+func GetCert(priv crypto.PrivateKey, fc fulciopb.CAClient, oidcIssuer string, oidcClientID string) (*fulciopb.SigningCertificate, error) {
 	tok, err := oauthflow.OIDConnect(oidcIssuer, oidcClientID, "", "", oauthflow.DefaultIDTokenGetter)
 	if err != nil {
 		return nil, err
 	}
 
-	// Sign the email address as part of the request
-	b := bytes.NewBuffer([]byte(tok.Subject))
-	proof, err := signer.SignMessage(b, options.WithCryptoSignerOpts(crypto.SHA256))
+	csrTmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: tok.Subject}}
+	derCSR, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, priv)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("error creating CSR: %w", err)
 	}
+	pemCSR := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: derCSR,
+	})
 
-	pubBytesPEM, err := cryptoutils.MarshalPublicKeyToPEM(signer.Public())
-	if err != nil {
-		return nil, err
-	}
 	cscr := &fulciopb.CreateSigningCertificateRequest{
-		Credentials: &fulciopb.Credentials{
-			Credentials: &fulciopb.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok.RawString,
-			},
-		},
-		Key: &fulciopb.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &fulciopb.PublicKeyRequest{
-				PublicKey: &fulciopb.PublicKey{
-					Content: string(pubBytesPEM),
-				},
-				ProofOfPossession: proof,
-			},
-		},
+		OidcIdentityToken:         tok.RawString,
+		CertificateSigningRequest: pemCSR,
 	}
 	return fc.CreateSigningCertificate(context.Background(), cscr)
 }
@@ -99,7 +85,7 @@ func NewClient(fulcioURL string) (fulciopb.CAClient, error) {
 }
 
 func main() {
-	signer, _, err := signature.NewDefaultECDSASignerVerifier()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -109,19 +95,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	certResp, err := GetCert(signer, fClient, oidcIssuer, oidcClientID)
+	certResp, err := GetCert(priv, fClient, oidcIssuer, oidcClientID)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	var chain *fulciopb.CertificateChain
-	switch cert := certResp.Certificate.(type) {
-	case *fulciopb.SigningCertificate_SignedCertificateDetachedSct:
-		chain = cert.SignedCertificateDetachedSct.GetChain()
-	case *fulciopb.SigningCertificate_SignedCertificateEmbeddedSct:
-		chain = cert.SignedCertificateEmbeddedSct.GetChain()
-	}
-	clientPEM, _ := pem.Decode([]byte(chain.Certificates[0]))
+	clientPEM, _ := pem.Decode([]byte(certResp.Certificates[0]))
 	cert, err := x509.ParseCertificate(clientPEM.Bytes)
 	if err != nil {
 		log.Fatal(err)

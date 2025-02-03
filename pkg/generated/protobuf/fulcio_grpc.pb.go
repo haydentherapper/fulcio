@@ -34,9 +34,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CA_CreateSigningCertificate_FullMethodName = "/dev.sigstore.fulcio.v2.CA/CreateSigningCertificate"
-	CA_GetTrustBundle_FullMethodName           = "/dev.sigstore.fulcio.v2.CA/GetTrustBundle"
-	CA_GetConfiguration_FullMethodName         = "/dev.sigstore.fulcio.v2.CA/GetConfiguration"
+	CA_CreateSigningCertificate_FullMethodName = "/dev.sigstore.fulcio.v3.CA/CreateSigningCertificate"
+	CA_GetConfiguration_FullMethodName         = "/dev.sigstore.fulcio.v3.CA/GetConfiguration"
 )
 
 // CAClient is the client API for CA service.
@@ -46,9 +45,6 @@ type CAClient interface {
 	// *
 	// Returns an X.509 certificate created by the Fulcio certificate authority for the given request parameters
 	CreateSigningCertificate(ctx context.Context, in *CreateSigningCertificateRequest, opts ...grpc.CallOption) (*SigningCertificate, error)
-	// *
-	// Returns the bundle of certificates that can be used to validate code signing certificates issued by this Fulcio instance
-	GetTrustBundle(ctx context.Context, in *GetTrustBundleRequest, opts ...grpc.CallOption) (*TrustBundle, error)
 	// *
 	// Returns the configuration of supported OIDC issuers, including the required challenge for each issuer.
 	GetConfiguration(ctx context.Context, in *GetConfigurationRequest, opts ...grpc.CallOption) (*Configuration, error)
@@ -66,16 +62,6 @@ func (c *cAClient) CreateSigningCertificate(ctx context.Context, in *CreateSigni
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SigningCertificate)
 	err := c.cc.Invoke(ctx, CA_CreateSigningCertificate_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *cAClient) GetTrustBundle(ctx context.Context, in *GetTrustBundleRequest, opts ...grpc.CallOption) (*TrustBundle, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(TrustBundle)
-	err := c.cc.Invoke(ctx, CA_GetTrustBundle_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -100,9 +86,6 @@ type CAServer interface {
 	// Returns an X.509 certificate created by the Fulcio certificate authority for the given request parameters
 	CreateSigningCertificate(context.Context, *CreateSigningCertificateRequest) (*SigningCertificate, error)
 	// *
-	// Returns the bundle of certificates that can be used to validate code signing certificates issued by this Fulcio instance
-	GetTrustBundle(context.Context, *GetTrustBundleRequest) (*TrustBundle, error)
-	// *
 	// Returns the configuration of supported OIDC issuers, including the required challenge for each issuer.
 	GetConfiguration(context.Context, *GetConfigurationRequest) (*Configuration, error)
 	mustEmbedUnimplementedCAServer()
@@ -117,9 +100,6 @@ type UnimplementedCAServer struct{}
 
 func (UnimplementedCAServer) CreateSigningCertificate(context.Context, *CreateSigningCertificateRequest) (*SigningCertificate, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateSigningCertificate not implemented")
-}
-func (UnimplementedCAServer) GetTrustBundle(context.Context, *GetTrustBundleRequest) (*TrustBundle, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetTrustBundle not implemented")
 }
 func (UnimplementedCAServer) GetConfiguration(context.Context, *GetConfigurationRequest) (*Configuration, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConfiguration not implemented")
@@ -163,24 +143,6 @@ func _CA_CreateSigningCertificate_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _CA_GetTrustBundle_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetTrustBundleRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CAServer).GetTrustBundle(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: CA_GetTrustBundle_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CAServer).GetTrustBundle(ctx, req.(*GetTrustBundleRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _CA_GetConfiguration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetConfigurationRequest)
 	if err := dec(in); err != nil {
@@ -203,16 +165,12 @@ func _CA_GetConfiguration_Handler(srv interface{}, ctx context.Context, dec func
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var CA_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "dev.sigstore.fulcio.v2.CA",
+	ServiceName: "dev.sigstore.fulcio.v3.CA",
 	HandlerType: (*CAServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "CreateSigningCertificate",
 			Handler:    _CA_CreateSigningCertificate_Handler,
-		},
-		{
-			MethodName: "GetTrustBundle",
-			Handler:    _CA_GetTrustBundle_Handler,
 		},
 		{
 			MethodName: "GetConfiguration",

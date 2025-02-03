@@ -28,7 +28,7 @@ services:
       "--ct-log-url=https://ct_server:6962/test",
       "--ct-log.tls-ca-cert=/config/tls/ca.crt",
       # Uncomment this for production logging
-      # "--log_type=prod",
+      # "--log-type=prod",
       ]
     restart: always # keep the server running
     ports:

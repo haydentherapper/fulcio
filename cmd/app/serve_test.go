@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,18 +59,23 @@ func TestDuplex(t *testing.T) {
 	// wait for duplex server to start up
 	time.Sleep(time.Second * 5)
 
-	var rootCert string
+	var issuerUrls []string
 	t.Run("http", func(t *testing.T) {
-		// Make sure we can grab the rootcert with the v1 endpoint
-		legacyClient := api.NewClient(serverURL)
-		resp, err := legacyClient.RootCert()
+		// Make sure we can grab the configuration with the v2 endpoint
+		client := api.NewClient(serverURL)
+		resp, err := client.Configuration()
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootCert = string(resp.ChainPEM)
+		if len(resp.Issuers) != 2 {
+			t.Fatalf("didn't get expected number of issuers over HTTP: %v", resp.Issuers)
+		}
+		for _, i := range resp.Issuers {
+			issuerUrls = append(issuerUrls, i.IssuerURL)
+		}
 	})
 
-	var grpcRootCert string
+	var grpcIssuerUrls []string
 	t.Run("grpc", func(t *testing.T) {
 		// Grab the rootcert with the v2 endpoint
 		conn, err := grpc.NewClient(fmt.Sprintf("localhost:%d", port), grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -77,21 +83,23 @@ func TestDuplex(t *testing.T) {
 			t.Fatal(err)
 		}
 		grpcClient := protobuf.NewCAClient(conn)
-		tb, err := grpcClient.GetTrustBundle(ctx, &protobuf.GetTrustBundleRequest{})
+		conf, err := grpcClient.GetConfiguration(ctx, &protobuf.GetConfigurationRequest{})
 		if err != nil {
 			t.Fatalf("error getting trust bundle: %v", err)
 		}
-		if len(tb.Chains) != 1 {
-			t.Fatalf("didn't get expected length certificate chain: %v", tb.Chains)
+		if len(conf.GetIssuers()) != 2 {
+			t.Fatalf("didn't get expected number of issuesr over gRPC: %v", conf.GetIssuers())
 		}
-		if len(tb.Chains[0].Certificates) != 1 {
-			t.Fatalf("didn't get expected length certs: %v", tb.Chains)
+		for _, i := range conf.GetIssuers() {
+			grpcIssuerUrls = append(grpcIssuerUrls, i.GetIssuerUrl())
 		}
-		grpcRootCert = strings.TrimSuffix(tb.Chains[0].Certificates[0], "\n")
 	})
 
-	t.Run("compare root certs", func(t *testing.T) {
-		if d := cmp.Diff(rootCert, grpcRootCert); d != "" {
+	slices.Sort(issuerUrls)
+	slices.Sort(grpcIssuerUrls)
+
+	t.Run("compare issuers", func(t *testing.T) {
+		if d := cmp.Diff(issuerUrls, grpcIssuerUrls); d != "" {
 			t.Fatal(d)
 		}
 	})
@@ -107,9 +115,9 @@ func TestDuplex(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// make sure there's something about hitting the GetTrustBundle in there
+		// make sure there's something about hitting the GetConfiguration in there
 		// this just confirms some metrics are being printed
-		if !strings.Contains(string(contents), "GetTrustBundle") {
+		if !strings.Contains(string(contents), "GetConfiguration") {
 			t.Fatalf("didn't get expected metrics output: %s", string(contents))
 		}
 	})

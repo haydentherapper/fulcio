@@ -14,21 +14,21 @@
 // limitations under the License.
 
 syntax = "proto3";
-package dev.sigstore.fulcio.v2;
+package dev.sigstore.fulcio.v3;
 
 import "google/api/annotations.proto";
 import "google/api/field_behavior.proto";
 import "protoc-gen-openapiv2/options/annotations.proto";
 
 option go_package = "github.com/sigstore/fulcio/pkg/generated/protobuf";
-option java_package = "dev.sigstore.fulcio.v2";
+option java_package = "dev.sigstore.fulcio.v3";
 option java_multiple_files = true;
 option java_outer_classname = "FulcioProto";
 
 option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
   info: {
     title: "Fulcio";
-    version: "2.0.0";
+    version: "3.0.0";
     contact: {
       name: "sigstore Fulcio project";
       url: "https://github.com/sigstore/fulcio";
@@ -62,16 +62,8 @@ service CA {
      */
     rpc CreateSigningCertificate (CreateSigningCertificateRequest) returns (SigningCertificate){
         option (google.api.http) = {
-          post: "/api/v2/signingCert"
+          post: "/api/v3/signingCert"
           body: "*"
-        };
-    }
-    /**
-     * Returns the bundle of certificates that can be used to validate code signing certificates issued by this Fulcio instance
-     */
-    rpc GetTrustBundle (GetTrustBundleRequest) returns (TrustBundle){
-        option (google.api.http) = {
-          get: "/api/v2/trustBundle"
         };
     }
 
@@ -80,99 +72,40 @@ service CA {
      */
     rpc GetConfiguration (GetConfigurationRequest) returns (Configuration) {
         option (google.api.http) = {
-          get: "/api/v2/configuration"
+          get: "/api/v3/configuration"
         };
     }
 }
 
 message CreateSigningCertificateRequest {
     /*
-     * Identity information about who possesses the private / public key pair presented
-     */
-    Credentials credentials    = 1 [(google.api.field_behavior) = REQUIRED];
-    oneof key {
-        /*
-         * The public key to be stored in the requested certificate along with a signed
-         * challenge as proof of possession of the private key.
-         */
-        PublicKeyRequest public_key_request = 2 [(google.api.field_behavior) = REQUIRED];
-        /*
-        * PKCS#10 PEM-encoded certificate signing request
-        *
-        * Contains the public key to be stored in the requested certificate. All other CSR fields
-        * are ignored. Since the CSR is self-signed, it also acts as a proof of possession of
-        * the private key.
-        *
-        * In particular, the CSR's subject name is not verified, or tested for
-        * compatibility with its specified X.509 name type (e.g. email address).
-        */
-        bytes certificate_signing_request  = 3 [(google.api.field_behavior) = REQUIRED];
-    }
-}
+    * Identity information about who possesses the private / public key pair presented
+    */
+    string oidc_identity_token = 1 [(google.api.field_behavior) = REQUIRED];
 
-message Credentials {
-    oneof credentials {
-        /*
-        * The OIDC token that identifies the caller
-        */
-        string oidc_identity_token = 1;
-    }
-}
+    /*
+    * PKCS#10 PEM-encoded certificate signing request
+    *
+    * Contains the public key to be stored in the requested certificate.
+    * CSR must be self-signed, as proof of possession of the private key.
+    * CSR's subject name must match the identity in the identity token.
+    */
+    bytes certificate_signing_request = 2 [(google.api.field_behavior) = REQUIRED];
 
-message PublicKeyRequest {
     /*
-     * The public key to be stored in the requested certificate
-     */
-    PublicKey public_key       = 1 [(google.api.field_behavior) = REQUIRED];
-    /*
-     * Proof that the client possesses the private key; must be verifiable by provided public key
-     *
-     * This is a currently a signature over the `sub` claim from the OIDC identity token
-     */
-    bytes proof_of_possession  = 2 [(google.api.field_behavior) = REQUIRED];
-}
+    * Optional: Digest of to-be-signed artifact to bind the code signing certificate
+    * to a given artifact, to prevent credential reuse
+    */
+    bytes artifact_digest = 3;
 
-message PublicKey {
     /*
-     * The cryptographic algorithm to use with the key material
-     */
-    PublicKeyAlgorithm algorithm = 1;
-    /*
-     * PKIX, ASN.1 DER or PEM-encoded public key. PEM is typically
-     * of type PUBLIC KEY.
-     */
-    string content               = 2 [(google.api.field_behavior) = REQUIRED];
+    * Optional: Whether or not to hash the identity in the subject alternative name
+    * Only supported for email addresses
+    */
+    bool hash_subject = 4;
 }
 
 message SigningCertificate {
-    oneof certificate {
-        SigningCertificateDetachedSCT signed_certificate_detached_sct = 1;
-        SigningCertificateEmbeddedSCT signed_certificate_embedded_sct = 2;
-    }
-}
-
-// (-- api-linter: core::0142::time-field-type=disabled
-//     aip.dev/not-precedent: SCT is defined in RFC6962 and we keep the name consistent for easier understanding. --)
-message SigningCertificateDetachedSCT {
-    /*
-     * The certificate chain serialized with the leaf certificate first, followed
-     * by all intermediate certificates (if present), finishing with the root certificate.
-     *
-     * All values are PEM-encoded certificates.
-     */
-    CertificateChain chain = 1;
-    /*
-     * The Signed Certificate Timestamp (SCT) is a promise for including the certificate in
-     * a certificate transparency log. It can be "stapled" to verify the inclusion of
-     * a certificate in the log in an offline fashion.
-     *
-     * The SCT format is an AddChainResponse struct, defined in
-     * https://github.com/google/certificate-transparency-go
-     */
-    bytes signed_certificate_timestamp = 2;
-}
-
-message SigningCertificateEmbeddedSCT {
     /*
      * The certificate chain serialized with the leaf certificate first, followed
      * by all intermediate certificates (if present), finishing with the root certificate.
@@ -183,33 +116,7 @@ message SigningCertificateEmbeddedSCT {
      * verify inclusion of the certificate in a log. The SCT format is a SignedCertificateTimestampList,
      * as defined in https://datatracker.ietf.org/doc/html/rfc6962#section-3.3
      */
-    CertificateChain chain = 1;
-}
-
-// This is created for forward compatibility in case we want to add fields to the TrustBundle service in the future
-message GetTrustBundleRequest {
-}
-
-message TrustBundle {
-    /*
-     * The set of PEM-encoded certificate chains for this Fulcio instance; each chain will start with any
-     * intermediate certificates (if present), finishing with the root certificate.
-     */
-    repeated CertificateChain chains = 1;
-}
-
-message CertificateChain {
-    /*
-     * The PEM-encoded certificate chain, ordered from leaf to intermediate to root as applicable.
-     */
     repeated string certificates = 1;
-}
-
-enum PublicKeyAlgorithm {
-    PUBLIC_KEY_ALGORITHM_UNSPECIFIED = 0;
-    RSA_PSS                          = 1;
-    ECDSA                            = 2;
-    ED25519                          = 3;
 }
 
 // This is created for forward compatibility in case we want to add fields in the future.
@@ -233,12 +140,10 @@ message OIDCIssuer {
     }
     // The expected audience of the OIDC token for the issuer.
     string audience = 3;
-    // The OIDC claim that must be signed for a proof of possession challenge.
-    string challenge_claim = 4;
     // The expected SPIFFE trust domain. Only present when the OIDC issuer issues tokens for SPIFFE identities.
-    string spiffe_trust_domain = 5;
+    string spiffe_trust_domain = 4;
     // The type of the IDP (e.g. "email", "username", etc.).
-    string issuer_type = 6;
+    string issuer_type = 5;
     // The expected subject domain. Only present when the OIDC issuer issues tokens for URI or username identities.
-    string subject_domain = 7;
+    string subject_domain = 6;
 }

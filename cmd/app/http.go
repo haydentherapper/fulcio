@@ -33,7 +33,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 	gw "github.com/sigstore/fulcio/pkg/generated/protobuf"
-	legacy_gw "github.com/sigstore/fulcio/pkg/generated/protobuf/legacy"
 	"github.com/sigstore/fulcio/pkg/log"
 	"github.com/sigstore/fulcio/pkg/server"
 	"github.com/spf13/viper"
@@ -55,7 +54,7 @@ func extractOIDCTokenFromAuthHeader(_ context.Context, req *http.Request) metada
 	return metadata.Pairs(server.MetadataOIDCTokenKey, token)
 }
 
-func createHTTPServer(ctx context.Context, serverEndpoint string, grpcServer, legacyGRPCServer *grpcServer) httpServer {
+func createHTTPServer(ctx context.Context, serverEndpoint string, grpcServer *grpcServer) httpServer {
 	opts := []grpc.DialOption{}
 	if grpcServer.ExposesGRPCTLS() {
 		/* #nosec G402 */ // InsecureSkipVerify is only used for the HTTP server to call the TLS-enabled grpc endpoint.
@@ -75,15 +74,6 @@ func createHTTPServer(ctx context.Context, serverEndpoint string, grpcServer, le
 
 	if err := gw.RegisterCAHandlerFromEndpoint(ctx, mux, grpcServer.grpcServerEndpoint, opts); err != nil {
 		log.Logger.Fatal(err)
-	}
-
-	if legacyGRPCServer != nil {
-		endpoint := fmt.Sprintf("unix:%v", legacyGRPCServer.grpcServerEndpoint)
-		// we are connecting over a unix domain socket, therefore we won't ever need TLS
-		unixDomainSocketOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-		if err := legacy_gw.RegisterCAHandlerFromEndpoint(ctx, mux, endpoint, unixDomainSocketOpts); err != nil {
-			log.Logger.Fatal(err)
-		}
 	}
 
 	// Limit request size
@@ -141,13 +131,6 @@ func setResponseCodeModifier(ctx context.Context, w http.ResponseWriter, _ proto
 	md, ok := runtime.ServerMetadataFromContext(ctx)
 	if !ok {
 		return nil
-	}
-
-	// set SCT if present ahead of modifying response code
-	if vals := md.HeaderMD.Get(server.SCTMetadataKey); len(vals) > 0 {
-		delete(md.HeaderMD, server.SCTMetadataKey)
-		delete(w.Header(), "Grpc-Metadata-sct")
-		w.Header().Set("SCT", vals[0])
 	}
 
 	// strip all GRPC response headers

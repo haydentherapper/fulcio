@@ -17,13 +17,9 @@ package server
 import (
 	"github.com/sigstore/fulcio/pkg/config"
 	"github.com/sigstore/fulcio/pkg/identity"
-	"github.com/sigstore/fulcio/pkg/identity/buildkite"
 	"github.com/sigstore/fulcio/pkg/identity/chainguard"
 	"github.com/sigstore/fulcio/pkg/identity/ciprovider"
-	"github.com/sigstore/fulcio/pkg/identity/codefresh"
 	"github.com/sigstore/fulcio/pkg/identity/email"
-	"github.com/sigstore/fulcio/pkg/identity/github"
-	"github.com/sigstore/fulcio/pkg/identity/gitlabcom"
 	"github.com/sigstore/fulcio/pkg/identity/kubernetes"
 	"github.com/sigstore/fulcio/pkg/identity/spiffe"
 	"github.com/sigstore/fulcio/pkg/identity/uri"
@@ -56,16 +52,8 @@ func getIssuer(meta string, i config.OIDCIssuer) identity.Issuer {
 	switch i.Type {
 	case config.IssuerTypeEmail:
 		return email.Issuer(issuerURL)
-	case config.IssuerTypeGithubWorkflow:
-		return github.Issuer(issuerURL)
 	case config.IssuerTypeCIProvider:
 		return ciprovider.Issuer(issuerURL)
-	case config.IssuerTypeGitLabPipeline:
-		return gitlabcom.Issuer(issuerURL)
-	case config.IssuerTypeBuildkiteJob:
-		return buildkite.Issuer(issuerURL)
-	case config.IssuerTypeCodefreshWorkflow:
-		return codefresh.Issuer(issuerURL)
 	case config.IssuerTypeChainguard:
 		return chainguard.Issuer(issuerURL)
 	case config.IssuerTypeKubernetes:

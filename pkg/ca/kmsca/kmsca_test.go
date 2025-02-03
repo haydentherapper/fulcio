@@ -41,16 +41,20 @@ func TestNewKMSCA(t *testing.T) {
 		t.Fatalf("unexpected error creating KMS CA: %v", err)
 	}
 
-	// Expect certificate chain from Root matches provided certificate chain
-	rootChains, err := ca.TrustBundle(context.TODO())
+	// Expect certificate chain returned from creating a certificate matches provided certificate chain
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("error fetching root: %v", err)
+		t.Fatalf("error creating key: %v", err)
 	}
-	if len(rootChains) != 1 {
-		t.Fatalf("unexpected number of chains: %d", len(rootChains))
+	csc, err := ca.CreateCertificate(context.Background(), MockPrincipal{}, &priv.PublicKey)
+	if err != nil {
+		t.Fatalf("error creating certificate: %v", err)
 	}
-	if !reflect.DeepEqual(rootChains[0], chain) {
-		t.Fatalf("cert chains do not match")
+	if len(csc.FinalChain) != 2 {
+		t.Fatalf("unexpected number of certificates in chain: %d", len(csc.FinalChain))
+	}
+	if !reflect.DeepEqual(csc.FinalChain, chain) {
+		t.Fatal("cert chain do not match")
 	}
 
 	// Expect signer and certificate's public keys match
@@ -76,4 +80,15 @@ func TestNewKMSCA(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "certificate signed by unknown authority") {
 		t.Fatalf("expected error with invalid certificate chain, got %v", err)
 	}
+}
+
+type MockPrincipal struct {
+}
+
+func (mp MockPrincipal) Name(ctx context.Context) string {
+	return "mock"
+}
+
+func (mp MockPrincipal) Embed(ctx context.Context, cert *x509.Certificate) error {
+	return nil
 }

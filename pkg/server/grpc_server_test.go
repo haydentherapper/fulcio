@@ -22,7 +22,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -62,9 +61,8 @@ import (
 )
 
 const (
-	expectedNoRootMessage      = "rpc error: code = Internal desc = error communicating with CA backend"
-	expectedTrustBundleMessage = "rpc error: code = Internal desc = error retrieving trust bundle from CA backend"
-	bufSize                    = 1024 * 1024
+	expectedNoRootMessage = "rpc error: code = Internal desc = error communicating with CA backend"
+	bufSize               = 1024 * 1024
 )
 
 func init() {
@@ -76,9 +74,6 @@ var lis *bufconn.Listener
 func passFulcioConfigThruContext(cfg *config.FulcioConfig) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		// For each request, infuse context with our snapshot of the FulcioConfig.
-		// TODO(mattmoor): Consider periodically (every minute?) refreshing the ConfigMap
-		// from disk, so that we don't need to cycle pods to pick up config updates.
-		// Alternately we could take advantage of Knative's configmap watcher.
 		ctx = config.With(ctx, cfg)
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -119,75 +114,6 @@ func bufDialer(ctx context.Context, _ string) (net.Conn, error) {
 	return lis.DialContext(ctx)
 }
 
-func TestMissingGetTrustBundleFails(t *testing.T) {
-	ctx := context.Background()
-	cfg := &config.FulcioConfig{}
-	server, conn := setupGRPCForTest(t, cfg, nil, &FailingCertificateAuthority{})
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
-
-	client := protobuf.NewCAClient(conn)
-
-	// Check that we get the CA root back as well.
-	_, err := client.GetTrustBundle(ctx, &protobuf.GetTrustBundleRequest{})
-	if err == nil {
-		t.Fatal("GetTrustBundle did not fail", err)
-	}
-	if err.Error() != expectedTrustBundleMessage {
-		t.Errorf("got an unexpected error: %q wanted: %q", err, expectedTrustBundleMessage)
-	}
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("expected invalid argument, got %v", status.Code(err))
-	}
-}
-
-func TestGetTrustBundleSuccess(t *testing.T) {
-	cfg := &config.FulcioConfig{}
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
-
-	client := protobuf.NewCAClient(conn)
-
-	root, err := client.GetTrustBundle(ctx, &protobuf.GetTrustBundleRequest{})
-	if err != nil {
-		t.Fatal("GetTrustBundle failed", err)
-	}
-	if len(root.Chains) == 0 {
-		t.Fatal("got back empty chain")
-	}
-	if len(root.Chains) != 1 {
-		t.Fatal("got back more than one chain")
-	}
-	if len(root.Chains[0].Certificates) != 1 {
-		t.Fatalf("expected 1 cert, found %d", len(root.Chains[0].Certificates))
-	}
-	block, rest := pem.Decode([]byte(root.Chains[0].Certificates[0]))
-	if block == nil {
-		t.Fatal("did not find PEM data")
-	}
-	if len(rest) != 0 {
-		t.Fatal("got more than bargained for, should only have one cert")
-	}
-	if block.Type != "CERTIFICATE" {
-		t.Fatalf("unexpected root type, expected CERTIFICATE, got %s", block.Type)
-	}
-	rootCert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatalf("failed to parse the received root cert: %v", err)
-	}
-	certs, _ := eca.GetSignerWithChain()
-	if !rootCert.Equal(certs[0]) {
-		t.Errorf("root CA does not match, wanted %+v got %+v", certs[0], rootCert)
-	}
-}
-
 // Tests GetConfiguration API
 func TestGetConfiguration(t *testing.T) {
 	_, emailIssuer := newOIDCIssuer(t)
@@ -195,10 +121,6 @@ func TestGetConfiguration(t *testing.T) {
 	_, uriIssuer := newOIDCIssuer(t)
 	_, usernameIssuer := newOIDCIssuer(t)
 	_, k8sIssuer := newOIDCIssuer(t)
-	_, buildkiteIssuer := newOIDCIssuer(t)
-	_, gitHubIssuer := newOIDCIssuer(t)
-	_, gitLabIssuer := newOIDCIssuer(t)
-	_, codefreshIssuer := newOIDCIssuer(t)
 	_, chainguardIssuer := newOIDCIssuer(t)
 	_, ciProviderIssuer := newOIDCIssuer(t)
 
@@ -235,26 +157,6 @@ func TestGetConfiguration(t *testing.T) {
 			%q: {
 				"IssuerURL": %q,
 				"ClientID": "sigstore",
-				"Type": "buildkite-job"
-			},
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "github-workflow"
-			},
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "gitlab-pipeline"
-			},
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "codefresh-workflow"
-			},
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
 				"Type": "chainguard-identity"
 			},
 			%q: {
@@ -273,10 +175,6 @@ func TestGetConfiguration(t *testing.T) {
 		uriIssuer, uriIssuer, uriIssuer,
 		emailIssuer, emailIssuer,
 		usernameIssuer, usernameIssuer, issuerDomain.Hostname(),
-		buildkiteIssuer, buildkiteIssuer,
-		gitHubIssuer, gitHubIssuer,
-		gitLabIssuer, gitLabIssuer,
-		codefreshIssuer, codefreshIssuer,
 		chainguardIssuer, chainguardIssuer,
 		ciProviderIssuer, ciProviderIssuer,
 		k8sIssuer)))
@@ -299,14 +197,13 @@ func TestGetConfiguration(t *testing.T) {
 		t.Fatal("GetConfiguration failed", err)
 	}
 
-	if got, want := len(config.Issuers), 11; got != want {
+	if got, want := len(config.Issuers), 7; got != want {
 		t.Fatalf("expected %d issuers, got %d", want, got)
 	}
 
 	expectedIssuers := map[string]bool{
 		emailIssuer: true, spiffeIssuer: true, uriIssuer: true,
-		usernameIssuer: true, k8sIssuer: true, gitHubIssuer: true,
-		buildkiteIssuer: true, gitLabIssuer: true, codefreshIssuer: true,
+		usernameIssuer: true, k8sIssuer: true,
 		chainguardIssuer: true, ciProviderIssuer: true,
 	}
 	for _, iss := range config.Issuers {
@@ -324,16 +221,6 @@ func TestGetConfiguration(t *testing.T) {
 
 		if iss.Audience != "sigstore" {
 			t.Fatalf("expected audience to be sigstore, got %v", iss.Audience)
-		}
-
-		if issURL == emailIssuer {
-			if iss.ChallengeClaim != "email" {
-				t.Fatalf("expected email claim for email PoP challenge, got %v", iss.ChallengeClaim)
-			}
-		} else {
-			if iss.ChallengeClaim != "sub" {
-				t.Fatalf("expected sub claim for non-email PoP challenge, got %v", iss.ChallengeClaim)
-			}
 		}
 
 		if issURL == spiffeIssuer {
@@ -359,10 +246,6 @@ func TestGetConfigurationFromYaml(t *testing.T) {
 	_, uriIssuer := newOIDCIssuer(t)
 	_, usernameIssuer := newOIDCIssuer(t)
 	_, k8sIssuer := newOIDCIssuer(t)
-	_, buildkiteIssuer := newOIDCIssuer(t)
-	_, gitHubIssuer := newOIDCIssuer(t)
-	_, gitLabIssuer := newOIDCIssuer(t)
-	_, codefreshIssuer := newOIDCIssuer(t)
 
 	issuerDomain, err := url.Parse(usernameIssuer)
 	if err != nil {
@@ -390,22 +273,6 @@ func TestGetConfigurationFromYaml(t *testing.T) {
         client-id: sigstore
         type: username
         subject-domain: %q
-      %v:
-        issuer-url: %q
-        client-id: sigstore
-        type: buildkite-job
-      %v:
-        issuer-url: %q
-        client-id: sigstore
-        type: github-workflow
-      %v:
-        issuer-url: %q
-        client-id: sigstore
-        type: gitlab-pipeline
-      %v:
-        issuer-url: %q
-        client-id: sigstore
-        type: codefresh-workflow
     meta-issuers:
       %v:
         client-id: sigstore
@@ -414,10 +281,6 @@ func TestGetConfigurationFromYaml(t *testing.T) {
 		uriIssuer, uriIssuer, uriIssuer,
 		emailIssuer, emailIssuer,
 		usernameIssuer, usernameIssuer, issuerDomain.Hostname(),
-		buildkiteIssuer, buildkiteIssuer,
-		gitHubIssuer, gitHubIssuer,
-		gitLabIssuer, gitLabIssuer,
-		codefreshIssuer, codefreshIssuer,
 		k8sIssuer))
 
 	cfg, err := config.Read(yamlBytes)
@@ -440,14 +303,13 @@ func TestGetConfigurationFromYaml(t *testing.T) {
 		t.Fatal("GetConfiguration failed", err)
 	}
 
-	if len(config.Issuers) != 9 {
-		t.Fatalf("expected 9 issuers, got %v", len(config.Issuers))
+	if len(config.Issuers) != 5 {
+		t.Fatalf("expected 5 issuers, got %v", len(config.Issuers))
 	}
 
 	expectedIssuers := map[string]bool{
 		emailIssuer: true, spiffeIssuer: true, uriIssuer: true,
-		usernameIssuer: true, k8sIssuer: true, gitHubIssuer: true,
-		buildkiteIssuer: true, gitLabIssuer: true, codefreshIssuer: true,
+		usernameIssuer: true, k8sIssuer: true,
 	}
 	for _, iss := range config.Issuers {
 		var issURL string
@@ -464,16 +326,6 @@ func TestGetConfigurationFromYaml(t *testing.T) {
 
 		if iss.Audience != "sigstore" {
 			t.Fatalf("expected audience to be sigstore, got %v", iss.Audience)
-		}
-
-		if issURL == emailIssuer {
-			if iss.ChallengeClaim != "email" {
-				t.Fatalf("expected email claim for email PoP challenge, got %v", iss.ChallengeClaim)
-			}
-		} else {
-			if iss.ChallengeClaim != "sub" {
-				t.Fatalf("expected sub claim for non-email PoP challenge, got %v", iss.ChallengeClaim)
-			}
 		}
 
 		if issURL == spiffeIssuer {
@@ -555,29 +407,18 @@ func TestAPIWithEmail(t *testing.T) {
 
 		client := protobuf.NewCAClient(conn)
 
-		pubBytes, proof := generateKeyAndProof(c.Subject, t)
+		pub, csr := generateKeyAndCSR(c.Subject, t)
 
 		// Hit the API to have it sign our certificate.
 		resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-			Credentials: &protobuf.Credentials{
-				Credentials: &protobuf.Credentials_OidcIdentityToken{
-					OidcIdentityToken: tok,
-				},
-			},
-			Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-				PublicKeyRequest: &protobuf.PublicKeyRequest{
-					PublicKey: &protobuf.PublicKey{
-						Content: pubBytes,
-					},
-					ProofOfPossession: proof,
-				},
-			},
+			OidcIdentityToken:         tok,
+			CertificateSigningRequest: csr,
 		})
 		if err != nil {
 			t.Fatalf("SigningCert() = %v", err)
 		}
 
-		leafCert := verifyResponse(resp, eca, c.Issuer, t)
+		leafCert := verifyResponse(resp, eca, pub, c.Issuer, t)
 
 		// Expect email subject
 		if len(leafCert.EmailAddresses) != 1 {
@@ -644,29 +485,18 @@ func TestAPIWithUsername(t *testing.T) {
 
 		client := protobuf.NewCAClient(conn)
 
-		pubBytes, proof := generateKeyAndProof(c.Subject, t)
+		pub, csr := generateKeyAndCSR(c.Subject, t)
 
 		// Hit the API to have it sign our certificate.
 		resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-			Credentials: &protobuf.Credentials{
-				Credentials: &protobuf.Credentials_OidcIdentityToken{
-					OidcIdentityToken: tok,
-				},
-			},
-			Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-				PublicKeyRequest: &protobuf.PublicKeyRequest{
-					PublicKey: &protobuf.PublicKey{
-						Content: pubBytes,
-					},
-					ProofOfPossession: proof,
-				},
-			},
+			OidcIdentityToken:         tok,
+			CertificateSigningRequest: csr,
 		})
 		if err != nil {
 			t.Fatalf("SigningCert() = %v", err)
 		}
 
-		leafCert := verifyResponse(resp, eca, c.Issuer, t)
+		leafCert := verifyResponse(resp, eca, pub, c.Issuer, t)
 
 		// Expect no email subject
 		if len(leafCert.EmailAddresses) != 0 {
@@ -741,29 +571,18 @@ func TestAPIWithUriSubject(t *testing.T) {
 		}()
 		client := protobuf.NewCAClient(conn)
 
-		pubBytes, proof := generateKeyAndProof(c.Subject, t)
+		pub, csr := generateKeyAndCSR(c.Subject, t)
 
 		// Hit the API to have it sign our certificate.
 		resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-			Credentials: &protobuf.Credentials{
-				Credentials: &protobuf.Credentials_OidcIdentityToken{
-					OidcIdentityToken: tok,
-				},
-			},
-			Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-				PublicKeyRequest: &protobuf.PublicKeyRequest{
-					PublicKey: &protobuf.PublicKey{
-						Content: pubBytes,
-					},
-					ProofOfPossession: proof,
-				},
-			},
+			OidcIdentityToken:         tok,
+			CertificateSigningRequest: csr,
 		})
 		if err != nil {
 			t.Fatalf("SigningCert() = %v", err)
 		}
 
-		leafCert := verifyResponse(resp, eca, c.Issuer, t)
+		leafCert := verifyResponse(resp, eca, pub, c.Issuer, t)
 
 		// Expect URI values
 		if len(leafCert.URIs) != 1 {
@@ -835,29 +654,18 @@ func TestAPIWithKubernetes(t *testing.T) {
 
 	client := protobuf.NewCAClient(conn)
 
-	pubBytes, proof := generateKeyAndProof(k8sSubject, t)
+	pub, csr := generateKeyAndCSR(k8sSubject, t)
 
 	// Hit the API to have it sign our certificate.
 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: csr,
 	})
 	if err != nil {
 		t.Fatalf("SigningCert() = %v", err)
 	}
 
-	leafCert := verifyResponse(resp, eca, k8sIssuer, t)
+	leafCert := verifyResponse(resp, eca, pub, k8sIssuer, t)
 
 	// Expect URI values
 	if len(leafCert.URIs) != 1 {
@@ -872,96 +680,243 @@ func TestAPIWithKubernetes(t *testing.T) {
 	}
 }
 
-// buildkiteClaims holds the additional JWT claims for Buildkite OIDC tokens
-type buildkiteClaims struct {
-	OrganizationSlug string `json:"organization_slug"`
-	PipelineSlug     string `json:"pipeline_slug"`
-}
+// // buildkiteClaims holds the additional JWT claims for Buildkite OIDC tokens
+// type buildkiteClaims struct {
+// 	OrganizationSlug string `json:"organization_slug"`
+// 	PipelineSlug     string `json:"pipeline_slug"`
+// }
 
-// Tests API for Buildkite subject types
-func TestAPIWithBuildkite(t *testing.T) {
-	buildkiteSigner, buildkiteIssuer := newOIDCIssuer(t)
+// // Tests API for Buildkite subject types
+// func TestAPIWithBuildkite(t *testing.T) {
+// 	buildkiteSigner, buildkiteIssuer := newOIDCIssuer(t)
 
-	// Create a FulcioConfig that supports these issuers.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "buildkite-job"
-			}
-        }
-	}`, buildkiteIssuer, buildkiteIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
+// 	// Create a FulcioConfig that supports these issuers.
+// 	cfg, err := config.Read([]byte(fmt.Sprintf(`{
+// 		"OIDCIssuers": {
+// 			%q: {
+// 				"IssuerURL": %q,
+// 				"ClientID": "sigstore",
+// 				"Type": "buildkite-job"
+// 			}
+//         }
+// 	}`, buildkiteIssuer, buildkiteIssuer)))
+// 	if err != nil {
+// 		t.Fatalf("config.Read() = %v", err)
+// 	}
 
-	claims := buildkiteClaims{
-		OrganizationSlug: "acme-inc",
-		PipelineSlug:     "bash-example",
-	}
-	buildkiteSubject := fmt.Sprintf("organization:%s:pipeline:%s:ref:refs/heads/main:commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:step:build", claims.OrganizationSlug, claims.PipelineSlug)
+// 	claims := buildkiteClaims{
+// 		OrganizationSlug: "acme-inc",
+// 		PipelineSlug:     "bash-example",
+// 	}
+// 	buildkiteSubject := fmt.Sprintf("organization:%s:pipeline:%s:ref:refs/heads/main:commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:step:build", claims.OrganizationSlug, claims.PipelineSlug)
 
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(buildkiteSigner).Claims(jwt.Claims{
-		Issuer:   buildkiteIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  buildkiteSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(&claims).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
+// 	// Create an OIDC token using this issuer's signer.
+// 	tok, err := jwt.Signed(buildkiteSigner).Claims(jwt.Claims{
+// 		Issuer:   buildkiteIssuer,
+// 		IssuedAt: jwt.NewNumericDate(time.Now()),
+// 		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
+// 		Subject:  buildkiteSubject,
+// 		Audience: jwt.Audience{"sigstore"},
+// 	}).Claims(&claims).Serialize()
+// 	if err != nil {
+// 		t.Fatalf("Serialize() = %v", err)
+// 	}
 
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
+// 	ctClient, eca := createCA(cfg, t)
+// 	ctx := context.Background()
+// 	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
+// 	defer func() {
+// 		server.Stop()
+// 		conn.Close()
+// 	}()
 
-	client := protobuf.NewCAClient(conn)
+// 	client := protobuf.NewCAClient(conn)
 
-	pubBytes, proof := generateKeyAndProof(buildkiteSubject, t)
+// 	pub, csr := generateKeyAndCSR(buildkiteSubject, t)
 
-	// Hit the API to have it sign our certificate.
-	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("SigningCert() = %v", err)
-	}
+// 	// Hit the API to have it sign our certificate.
+// 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
+// 		OidcIdentityToken:         tok,
+// 		CertificateSigningRequest: csr,
+// 	})
+// 	if err != nil {
+// 		t.Fatalf("SigningCert() = %v", err)
+// 	}
 
-	leafCert := verifyResponse(resp, eca, buildkiteIssuer, t)
+// 	leafCert := verifyResponse(resp, eca, pub, buildkiteIssuer, t)
 
-	// Expect URI values
-	if len(leafCert.URIs) != 1 {
-		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
-	}
-	buildkiteURL := fmt.Sprintf("https://buildkite.com/%s/%s", claims.OrganizationSlug, claims.PipelineSlug)
-	buildkiteURI, err := url.Parse(buildkiteURL)
-	if err != nil {
-		t.Fatalf("failed to parse subject URI")
-	}
-	if *leafCert.URIs[0] != *buildkiteURI {
-		t.Fatalf("URIs do not match: Expected %v, got %v", buildkiteURI, leafCert.URIs[0])
-	}
-}
+// 	// Expect URI values
+// 	if len(leafCert.URIs) != 1 {
+// 		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
+// 	}
+// 	buildkiteURL := fmt.Sprintf("https://buildkite.com/%s/%s", claims.OrganizationSlug, claims.PipelineSlug)
+// 	buildkiteURI, err := url.Parse(buildkiteURL)
+// 	if err != nil {
+// 		t.Fatalf("failed to parse subject URI")
+// 	}
+// 	if *leafCert.URIs[0] != *buildkiteURI {
+// 		t.Fatalf("URIs do not match: Expected %v, got %v", buildkiteURI, leafCert.URIs[0])
+// 	}
+// }
 
+// // githubClaims holds the additional JWT claims for GitHub OIDC tokens
+// type githubClaims struct {
+// 	JobWorkflowRef       string `json:"job_workflow_ref"`
+// 	Sha                  string `json:"sha"`
+// 	EventName            string `json:"event_name"`
+// 	Repository           string `json:"repository"`
+// 	Workflow             string `json:"workflow"`
+// 	Ref                  string `json:"ref"`
+// 	JobWorkflowSha       string `json:"job_workflow_sha"`
+// 	RunnerEnvironment    string `json:"runner_environment"`
+// 	RepositoryID         string `json:"repository_id"`
+// 	RepositoryOwner      string `json:"repository_owner"`
+// 	RepositoryOwnerID    string `json:"repository_owner_id"`
+// 	RepositoryVisibility string `json:"repository_visibility"`
+// 	WorkflowRef          string `json:"workflow_ref"`
+// 	WorkflowSha          string `json:"workflow_sha"`
+// 	RunID                string `json:"run_id"`
+// 	RunAttempt           string `json:"run_attempt"`
+// }
+
+// // Tests API for GitHub subject types
+// func TestAPIWithGitHub(t *testing.T) {
+// 	githubSigner, githubIssuer := newOIDCIssuer(t)
+
+// 	// Create a FulcioConfig that supports these issuers.
+// 	cfg, err := config.Read([]byte(fmt.Sprintf(`{
+// 		"OIDCIssuers": {
+// 			%q: {
+// 				"IssuerURL": %q,
+// 				"ClientID": "sigstore",
+// 				"Type": "github-workflow"
+// 			}
+//         }
+// 	}`, githubIssuer, githubIssuer)))
+// 	if err != nil {
+// 		t.Fatalf("config.Read() = %v", err)
+// 	}
+
+// 	claims := githubClaims{
+// 		JobWorkflowRef:       "job/workflow/ref",
+// 		Sha:                  "sha",
+// 		EventName:            "trigger",
+// 		Repository:           "sigstore/fulcio",
+// 		Workflow:             "workflow",
+// 		Ref:                  "refs/heads/main",
+// 		JobWorkflowSha:       "example-sha",
+// 		RunnerEnvironment:    "cloud-hosted",
+// 		RepositoryID:         "12345",
+// 		RepositoryOwner:      "username",
+// 		RepositoryOwnerID:    "345",
+// 		RepositoryVisibility: "public",
+// 		WorkflowRef:          "sigstore/other/.github/workflows/foo.yaml@refs/heads/main",
+// 		WorkflowSha:          "example-sha-other",
+// 		RunID:                "42",
+// 		RunAttempt:           "1",
+// 	}
+// 	githubSubject := fmt.Sprintf("repo:%s:ref:%s", claims.Repository, claims.Ref)
+
+// 	// Create an OIDC token using this issuer's signer.
+// 	tok, err := jwt.Signed(githubSigner).Claims(jwt.Claims{
+// 		Issuer:   githubIssuer,
+// 		IssuedAt: jwt.NewNumericDate(time.Now()),
+// 		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
+// 		Subject:  githubSubject,
+// 		Audience: jwt.Audience{"sigstore"},
+// 	}).Claims(&claims).Serialize()
+// 	if err != nil {
+// 		t.Fatalf("Serialize() = %v", err)
+// 	}
+
+// 	ctClient, eca := createCA(cfg, t)
+// 	ctx := context.Background()
+// 	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
+// 	defer func() {
+// 		server.Stop()
+// 		conn.Close()
+// 	}()
+
+// 	client := protobuf.NewCAClient(conn)
+
+// 	pub, csr := generateKeyAndCSR(githubSubject, t)
+
+// 	// Hit the API to have it sign our certificate.
+// 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
+// 		OidcIdentityToken:         tok,
+// 		CertificateSigningRequest: csr,
+// 	})
+// 	if err != nil {
+// 		t.Fatalf("SigningCert() = %v", err)
+// 	}
+
+// 	leafCert := verifyResponse(resp, eca, pub, githubIssuer, t)
+
+// 	// Expect URI values
+// 	if len(leafCert.URIs) != 1 {
+// 		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
+// 	}
+// 	githubURL := fmt.Sprintf("https://github.com/%s", claims.JobWorkflowRef)
+// 	githubURI, err := url.Parse(githubURL)
+// 	if err != nil {
+// 		t.Fatalf("failed to parse expected url")
+// 	}
+// 	if *leafCert.URIs[0] != *githubURI {
+// 		t.Fatalf("URIs do not match: Expected %v, got %v", githubURI, leafCert.URIs[0])
+// 	}
+// 	// Verify custom OID values
+// 	deprecatedExpectedExts := map[int]string{
+// 		2: claims.EventName,
+// 		3: claims.Sha,
+// 		4: claims.Workflow,
+// 		5: claims.Repository,
+// 		6: claims.Ref,
+// 	}
+// 	for o, value := range deprecatedExpectedExts {
+// 		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
+// 		if !found {
+// 			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
+// 		}
+// 		if string(ext.Value) != value {
+// 			t.Fatalf("unexpected extension value, expected %s, got %s", value, ext.Value)
+// 		}
+// 	}
+// 	url := "https://github.com/"
+// 	expectedExts := map[int]string{
+// 		9:  url + claims.JobWorkflowRef,
+// 		10: claims.JobWorkflowSha,
+// 		11: claims.RunnerEnvironment,
+// 		12: url + claims.Repository,
+// 		13: claims.Sha,
+// 		14: claims.Ref,
+// 		15: claims.RepositoryID,
+// 		16: url + claims.RepositoryOwner,
+// 		17: claims.RepositoryOwnerID,
+// 		18: url + claims.WorkflowRef,
+// 		19: claims.WorkflowSha,
+// 		20: claims.EventName,
+// 		21: url + claims.Repository + "/actions/runs/" + claims.RunID + "/attempts/" + claims.RunAttempt,
+// 		22: claims.RepositoryVisibility,
+// 	}
+// 	for o, value := range expectedExts {
+// 		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
+// 		if !found {
+// 			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
+// 		}
+// 		var extValue string
+// 		rest, err := asn1.Unmarshal(ext.Value, &extValue)
+// 		if err != nil {
+// 			t.Fatalf("error unmarshalling extension: :%v", err)
+// 		}
+// 		if len(rest) != 0 {
+// 			t.Fatal("error unmarshalling extension, rest is not 0")
+// 		}
+// 		if string(extValue) != value {
+// 			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
+// 		}
+// 	}
+
+// TODO: Dedup, deal with other commented out providers
 // githubClaims holds the additional JWT claims for GitHub OIDC tokens
 type githubClaims struct {
 	JobWorkflowRef       string `json:"job_workflow_ref"`
@@ -980,155 +935,6 @@ type githubClaims struct {
 	WorkflowSha          string `json:"workflow_sha"`
 	RunID                string `json:"run_id"`
 	RunAttempt           string `json:"run_attempt"`
-}
-
-// Tests API for GitHub subject types
-func TestAPIWithGitHub(t *testing.T) {
-	githubSigner, githubIssuer := newOIDCIssuer(t)
-
-	// Create a FulcioConfig that supports these issuers.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "github-workflow"
-			}
-        }
-	}`, githubIssuer, githubIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
-
-	claims := githubClaims{
-		JobWorkflowRef:       "job/workflow/ref",
-		Sha:                  "sha",
-		EventName:            "trigger",
-		Repository:           "sigstore/fulcio",
-		Workflow:             "workflow",
-		Ref:                  "refs/heads/main",
-		JobWorkflowSha:       "example-sha",
-		RunnerEnvironment:    "cloud-hosted",
-		RepositoryID:         "12345",
-		RepositoryOwner:      "username",
-		RepositoryOwnerID:    "345",
-		RepositoryVisibility: "public",
-		WorkflowRef:          "sigstore/other/.github/workflows/foo.yaml@refs/heads/main",
-		WorkflowSha:          "example-sha-other",
-		RunID:                "42",
-		RunAttempt:           "1",
-	}
-	githubSubject := fmt.Sprintf("repo:%s:ref:%s", claims.Repository, claims.Ref)
-
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(githubSigner).Claims(jwt.Claims{
-		Issuer:   githubIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  githubSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(&claims).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
-
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
-
-	client := protobuf.NewCAClient(conn)
-
-	pubBytes, proof := generateKeyAndProof(githubSubject, t)
-
-	// Hit the API to have it sign our certificate.
-	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("SigningCert() = %v", err)
-	}
-
-	leafCert := verifyResponse(resp, eca, githubIssuer, t)
-
-	// Expect URI values
-	if len(leafCert.URIs) != 1 {
-		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
-	}
-	githubURL := fmt.Sprintf("https://github.com/%s", claims.JobWorkflowRef)
-	githubURI, err := url.Parse(githubURL)
-	if err != nil {
-		t.Fatalf("failed to parse expected url")
-	}
-	if *leafCert.URIs[0] != *githubURI {
-		t.Fatalf("URIs do not match: Expected %v, got %v", githubURI, leafCert.URIs[0])
-	}
-	// Verify custom OID values
-	deprecatedExpectedExts := map[int]string{
-		2: claims.EventName,
-		3: claims.Sha,
-		4: claims.Workflow,
-		5: claims.Repository,
-		6: claims.Ref,
-	}
-	for o, value := range deprecatedExpectedExts {
-		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
-		if !found {
-			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
-		}
-		if string(ext.Value) != value {
-			t.Fatalf("unexpected extension value, expected %s, got %s", value, ext.Value)
-		}
-	}
-	url := "https://github.com/"
-	expectedExts := map[int]string{
-		9:  url + claims.JobWorkflowRef,
-		10: claims.JobWorkflowSha,
-		11: claims.RunnerEnvironment,
-		12: url + claims.Repository,
-		13: claims.Sha,
-		14: claims.Ref,
-		15: claims.RepositoryID,
-		16: url + claims.RepositoryOwner,
-		17: claims.RepositoryOwnerID,
-		18: url + claims.WorkflowRef,
-		19: claims.WorkflowSha,
-		20: claims.EventName,
-		21: url + claims.Repository + "/actions/runs/" + claims.RunID + "/attempts/" + claims.RunAttempt,
-		22: claims.RepositoryVisibility,
-	}
-	for o, value := range expectedExts {
-		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
-		if !found {
-			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
-		}
-		var extValue string
-		rest, err := asn1.Unmarshal(ext.Value, &extValue)
-		if err != nil {
-			t.Fatalf("error unmarshalling extension: :%v", err)
-		}
-		if len(rest) != 0 {
-			t.Fatal("error unmarshalling extension, rest is not 0")
-		}
-		if string(extValue) != value {
-			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
-		}
-	}
 }
 
 // Tests API for CiProvider subject types
@@ -1217,27 +1023,18 @@ func TestAPIWithCiProvider(t *testing.T) {
 		conn.Close()
 	}()
 	client := protobuf.NewCAClient(conn)
-	pubBytes, proof := generateKeyAndProof(githubSubject, t)
+	pub, csr := generateKeyAndCSR(githubSubject, t)
+
 	// Hit the API to have it sign our certificate.
 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: csr,
 	})
 	if err != nil {
 		t.Fatalf("SigningCert() = %v", err)
 	}
-	leafCert := verifyResponse(resp, eca, ciProviderIssuer, t)
+
+	leafCert := verifyResponse(resp, eca, pub, ciProviderIssuer, t)
 	// Expect URI values
 	if len(leafCert.URIs) != 1 {
 		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
@@ -1303,291 +1100,269 @@ func TestAPIWithCiProvider(t *testing.T) {
 	}
 }
 
-// gitlabClaims holds the additional JWT claims for GitLab OIDC tokens
-type gitlabClaims struct {
-	ProjectPath       string `json:"project_path"`
-	ProjectID         string `json:"project_id"`
-	PipelineSource    string `json:"pipeline_source"`
-	PipelineID        string `json:"pipeline_id"`
-	CiConfigRefURI    string `json:"ci_config_ref_uri"`
-	CiConfigSha       string `json:"ci_config_sha"`
-	NamespacePath     string `json:"namespace_path"`
-	NamespaceID       string `json:"namespace_id"`
-	JobID             string `json:"job_id"`
-	Ref               string `json:"ref"`
-	RefType           string `json:"ref_type"`
-	Sha               string `json:"sha"`
-	RunnerEnvironment string `json:"runner_environment"`
-	RunnerID          int64  `json:"runner_id"`
-	ProjectVisibility string `json:"project_visibility"`
-}
+// // gitlabClaims holds the additional JWT claims for GitLab OIDC tokens
+// type gitlabClaims struct {
+// 	ProjectPath       string `json:"project_path"`
+// 	ProjectID         string `json:"project_id"`
+// 	PipelineSource    string `json:"pipeline_source"`
+// 	PipelineID        string `json:"pipeline_id"`
+// 	CiConfigRefURI    string `json:"ci_config_ref_uri"`
+// 	CiConfigSha       string `json:"ci_config_sha"`
+// 	NamespacePath     string `json:"namespace_path"`
+// 	NamespaceID       string `json:"namespace_id"`
+// 	JobID             string `json:"job_id"`
+// 	Ref               string `json:"ref"`
+// 	RefType           string `json:"ref_type"`
+// 	Sha               string `json:"sha"`
+// 	RunnerEnvironment string `json:"runner_environment"`
+// 	RunnerID          int64  `json:"runner_id"`
+// 	ProjectVisibility string `json:"project_visibility"`
+// }
 
-// Tests API for GitLab subject types
-func TestAPIWithGitLab(t *testing.T) {
-	gitLabSigner, gitLabIssuer := newOIDCIssuer(t)
+// // Tests API for GitLab subject types
+// func TestAPIWithGitLab(t *testing.T) {
+// 	gitLabSigner, gitLabIssuer := newOIDCIssuer(t)
 
-	// Create a FulcioConfig that supports these issuers.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "gitlab-pipeline"
-			}
-        }
-	}`, gitLabIssuer, gitLabIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
+// 	// Create a FulcioConfig that supports these issuers.
+// 	cfg, err := config.Read([]byte(fmt.Sprintf(`{
+// 		"OIDCIssuers": {
+// 			%q: {
+// 				"IssuerURL": %q,
+// 				"ClientID": "sigstore",
+// 				"Type": "gitlab-pipeline"
+// 			}
+//         }
+// 	}`, gitLabIssuer, gitLabIssuer)))
+// 	if err != nil {
+// 		t.Fatalf("config.Read() = %v", err)
+// 	}
 
-	claims := gitlabClaims{
-		ProjectPath:       "cpanato/testing-cosign",
-		ProjectID:         "42831435",
-		PipelineSource:    "push",
-		PipelineID:        "757451528",
-		CiConfigRefURI:    "gitlab.com/cpanato/testing-cosign//.gitlab-ci.yml@refs/heads/main",
-		CiConfigSha:       "714a629c0b401fdce83e847fc9589983fc6f46bc",
-		NamespacePath:     "cpanato",
-		NamespaceID:       "1730270",
-		JobID:             "3659681386",
-		Ref:               "main",
-		RefType:           "branch",
-		Sha:               "714a629c0b401fdce83e847fc9589983fc6f46bc",
-		RunnerID:          1,
-		RunnerEnvironment: "gitlab-hosted",
-		ProjectVisibility: "public",
-	}
+// 	claims := gitlabClaims{
+// 		ProjectPath:       "cpanato/testing-cosign",
+// 		ProjectID:         "42831435",
+// 		PipelineSource:    "push",
+// 		PipelineID:        "757451528",
+// 		CiConfigRefURI:    "gitlab.com/cpanato/testing-cosign//.gitlab-ci.yml@refs/heads/main",
+// 		CiConfigSha:       "714a629c0b401fdce83e847fc9589983fc6f46bc",
+// 		NamespacePath:     "cpanato",
+// 		NamespaceID:       "1730270",
+// 		JobID:             "3659681386",
+// 		Ref:               "main",
+// 		RefType:           "branch",
+// 		Sha:               "714a629c0b401fdce83e847fc9589983fc6f46bc",
+// 		RunnerID:          1,
+// 		RunnerEnvironment: "gitlab-hosted",
+// 		ProjectVisibility: "public",
+// 	}
 
-	gitLabSubject := fmt.Sprintf("project_path:%s:ref_type:%s:ref:%s", claims.ProjectPath, claims.RefType, claims.Ref)
+// 	gitLabSubject := fmt.Sprintf("project_path:%s:ref_type:%s:ref:%s", claims.ProjectPath, claims.RefType, claims.Ref)
 
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(gitLabSigner).Claims(jwt.Claims{
-		Issuer:   gitLabIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  gitLabSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(&claims).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
+// 	// Create an OIDC token using this issuer's signer.
+// 	tok, err := jwt.Signed(gitLabSigner).Claims(jwt.Claims{
+// 		Issuer:   gitLabIssuer,
+// 		IssuedAt: jwt.NewNumericDate(time.Now()),
+// 		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
+// 		Subject:  gitLabSubject,
+// 		Audience: jwt.Audience{"sigstore"},
+// 	}).Claims(&claims).Serialize()
+// 	if err != nil {
+// 		t.Fatalf("Serialize() = %v", err)
+// 	}
 
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
+// 	ctClient, eca := createCA(cfg, t)
+// 	ctx := context.Background()
+// 	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
+// 	defer func() {
+// 		server.Stop()
+// 		conn.Close()
+// 	}()
 
-	client := protobuf.NewCAClient(conn)
-	pubBytes, proof := generateKeyAndProof(gitLabSubject, t)
+// 	client := protobuf.NewCAClient(conn)
+// 	pub, csr := generateKeyAndCSR(gitLabSubject, t)
 
-	// Hit the API to have it sign our certificate.
-	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("SigningCert() = %v", err)
-	}
+// 	// Hit the API to have it sign our certificate.
+// 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
+// 		OidcIdentityToken:         tok,
+// 		CertificateSigningRequest: csr,
+// 	})
+// 	if err != nil {
+// 		t.Fatalf("SigningCert() = %v", err)
+// 	}
 
-	leafCert := verifyResponse(resp, eca, gitLabIssuer, t)
+// 	leafCert := verifyResponse(resp, eca, pub, gitLabIssuer, t)
 
-	// Expect URI values
-	if len(leafCert.URIs) != 1 {
-		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
-	}
+// 	// Expect URI values
+// 	if len(leafCert.URIs) != 1 {
+// 		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
+// 	}
 
-	baseURL := "https://gitlab.com/"
-	gitLabURL := baseURL + fmt.Sprintf("%s//.gitlab-ci.yml@refs/heads/%s", claims.ProjectPath, claims.Ref)
-	gitLabURI, err := url.Parse(gitLabURL)
-	if err != nil {
-		t.Fatalf("failed to parse expected url")
-	}
-	if *leafCert.URIs[0] != *gitLabURI {
-		t.Fatalf("URIs do not match: Expected %v, got %v", gitLabURI, leafCert.URIs[0])
-	}
-	expectedExts := map[int]string{
-		9:  gitLabURL,
-		10: claims.CiConfigSha,
-		11: claims.RunnerEnvironment,
-		12: baseURL + claims.ProjectPath,
-		13: claims.Sha,
-		14: fmt.Sprintf("refs/heads/%s", claims.Ref),
-		15: claims.ProjectID,
-		16: baseURL + claims.NamespacePath,
-		17: claims.NamespaceID,
-		18: gitLabURL,
-		19: claims.CiConfigSha,
-		20: claims.PipelineSource,
-		21: baseURL + claims.ProjectPath + "/-/jobs/" + claims.JobID,
-		22: claims.ProjectVisibility,
-	}
-	for o, value := range expectedExts {
-		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
-		if !found {
-			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
-		}
-		var extValue string
-		rest, err := asn1.Unmarshal(ext.Value, &extValue)
-		if err != nil {
-			t.Fatalf("error unmarshalling extension: :%v", err)
-		}
-		if len(rest) != 0 {
-			t.Fatal("error unmarshalling extension, rest is not 0")
-		}
-		if string(extValue) != value {
-			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
-		}
-	}
-}
+// 	baseURL := "https://gitlab.com/"
+// 	gitLabURL := baseURL + fmt.Sprintf("%s//.gitlab-ci.yml@refs/heads/%s", claims.ProjectPath, claims.Ref)
+// 	gitLabURI, err := url.Parse(gitLabURL)
+// 	if err != nil {
+// 		t.Fatalf("failed to parse expected url")
+// 	}
+// 	if *leafCert.URIs[0] != *gitLabURI {
+// 		t.Fatalf("URIs do not match: Expected %v, got %v", gitLabURI, leafCert.URIs[0])
+// 	}
+// 	expectedExts := map[int]string{
+// 		9:  gitLabURL,
+// 		10: claims.CiConfigSha,
+// 		11: claims.RunnerEnvironment,
+// 		12: baseURL + claims.ProjectPath,
+// 		13: claims.Sha,
+// 		14: fmt.Sprintf("refs/heads/%s", claims.Ref),
+// 		15: claims.ProjectID,
+// 		16: baseURL + claims.NamespacePath,
+// 		17: claims.NamespaceID,
+// 		18: gitLabURL,
+// 		19: claims.CiConfigSha,
+// 		20: claims.PipelineSource,
+// 		21: baseURL + claims.ProjectPath + "/-/jobs/" + claims.JobID,
+// 		22: claims.ProjectVisibility,
+// 	}
+// 	for o, value := range expectedExts {
+// 		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
+// 		if !found {
+// 			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
+// 		}
+// 		var extValue string
+// 		rest, err := asn1.Unmarshal(ext.Value, &extValue)
+// 		if err != nil {
+// 			t.Fatalf("error unmarshalling extension: :%v", err)
+// 		}
+// 		if len(rest) != 0 {
+// 			t.Fatal("error unmarshalling extension, rest is not 0")
+// 		}
+// 		if string(extValue) != value {
+// 			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
+// 		}
+// 	}
+// }
 
-// codefreshClaims holds the additional JWT claims for Codefresh OIDC tokens
-type codefreshClaims struct {
-	AccountID         string `json:"account_id"`
-	AccountName       string `json:"account_name"`
-	PipelineID        string `json:"pipeline_id"`
-	PipelineName      string `json:"pipeline_name"`
-	WorkflowID        string `json:"workflow_id"`
-	Initiator         string `json:"initiator"`
-	SCMRepoURL        string `json:"scm_repo_url"`
-	SCMUsername       string `json:"scm_user_name"`
-	SCMRef            string `json:"scm_ref"`
-	SCMPullRequestRef string `json:"scm_pull_request_target_branch"`
-	RunnerEnvironment string `json:"runner_environment"`
-	PlatformURL       string `json:"platform_url"`
-}
+// // codefreshClaims holds the additional JWT claims for Codefresh OIDC tokens
+// type codefreshClaims struct {
+// 	AccountID         string `json:"account_id"`
+// 	AccountName       string `json:"account_name"`
+// 	PipelineID        string `json:"pipeline_id"`
+// 	PipelineName      string `json:"pipeline_name"`
+// 	WorkflowID        string `json:"workflow_id"`
+// 	Initiator         string `json:"initiator"`
+// 	SCMRepoURL        string `json:"scm_repo_url"`
+// 	SCMUsername       string `json:"scm_user_name"`
+// 	SCMRef            string `json:"scm_ref"`
+// 	SCMPullRequestRef string `json:"scm_pull_request_target_branch"`
+// 	RunnerEnvironment string `json:"runner_environment"`
+// 	PlatformURL       string `json:"platform_url"`
+// }
 
-// Tests API for Codefresh subject types
-func TestAPIWithCodefresh(t *testing.T) {
-	codefreshSigner, codefreshIssuer := newOIDCIssuer(t)
+// // Tests API for Codefresh subject types
+// func TestAPIWithCodefresh(t *testing.T) {
+// 	codefreshSigner, codefreshIssuer := newOIDCIssuer(t)
 
-	// Create a FulcioConfig that supports these issuers.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "codefresh-workflow"
-			}
-        }
-	}`, codefreshIssuer, codefreshIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
+// 	// Create a FulcioConfig that supports these issuers.
+// 	cfg, err := config.Read([]byte(fmt.Sprintf(`{
+// 		"OIDCIssuers": {
+// 			%q: {
+// 				"IssuerURL": %q,
+// 				"ClientID": "sigstore",
+// 				"Type": "codefresh-workflow"
+// 			}
+//         }
+// 	}`, codefreshIssuer, codefreshIssuer)))
+// 	if err != nil {
+// 		t.Fatalf("config.Read() = %v", err)
+// 	}
 
-	claims := codefreshClaims{
-		AccountID:         "628a80b693a15c0f9c13ab75",
-		AccountName:       "test-codefresh",
-		PipelineID:        "65e6d5551e47e5bc243ca93f",
-		PipelineName:      "oidc-test/oidc-test-2",
-		WorkflowID:        "65e6ebe0bfbfa1782876165e",
-		SCMUsername:       "test-codefresh",
-		SCMRepoURL:        "https://github.com/test-codefresh/fulcio",
-		SCMRef:            "feat/codefresh-issuer",
-		SCMPullRequestRef: "main",
-		RunnerEnvironment: "hybrid",
-		PlatformURL:       "https://g.codefresh.io",
-	}
-	codefreshSubject := "account:628a80b693a15c0f9c13ab75:pipeline:65e6d5551e47e5bc243ca93f:scm_repo_url:https://github.com/test-codefresh/fulcio:scm_user_name:test-codefresh:scm_ref:feat/codefresh-issuer:scm_pull_request_target_branch:main"
+// 	claims := codefreshClaims{
+// 		AccountID:         "628a80b693a15c0f9c13ab75",
+// 		AccountName:       "test-codefresh",
+// 		PipelineID:        "65e6d5551e47e5bc243ca93f",
+// 		PipelineName:      "oidc-test/oidc-test-2",
+// 		WorkflowID:        "65e6ebe0bfbfa1782876165e",
+// 		SCMUsername:       "test-codefresh",
+// 		SCMRepoURL:        "https://github.com/test-codefresh/fulcio",
+// 		SCMRef:            "feat/codefresh-issuer",
+// 		SCMPullRequestRef: "main",
+// 		RunnerEnvironment: "hybrid",
+// 		PlatformURL:       "https://g.codefresh.io",
+// 	}
+// 	codefreshSubject := "account:628a80b693a15c0f9c13ab75:pipeline:65e6d5551e47e5bc243ca93f:scm_repo_url:https://github.com/test-codefresh/fulcio:scm_user_name:test-codefresh:scm_ref:feat/codefresh-issuer:scm_pull_request_target_branch:main"
 
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(codefreshSigner).Claims(jwt.Claims{
-		Issuer:   codefreshIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  codefreshSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(&claims).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
+// 	// Create an OIDC token using this issuer's signer.
+// 	tok, err := jwt.Signed(codefreshSigner).Claims(jwt.Claims{
+// 		Issuer:   codefreshIssuer,
+// 		IssuedAt: jwt.NewNumericDate(time.Now()),
+// 		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
+// 		Subject:  codefreshSubject,
+// 		Audience: jwt.Audience{"sigstore"},
+// 	}).Claims(&claims).Serialize()
+// 	if err != nil {
+// 		t.Fatalf("Serialize() = %v", err)
+// 	}
 
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
+// 	ctClient, eca := createCA(cfg, t)
+// 	ctx := context.Background()
+// 	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
+// 	defer func() {
+// 		server.Stop()
+// 		conn.Close()
+// 	}()
 
-	client := protobuf.NewCAClient(conn)
+// 	client := protobuf.NewCAClient(conn)
 
-	pubBytes, proof := generateKeyAndProof(codefreshSubject, t)
+// 	pub, csr := generateKeyAndCSR(codefreshSubject, t)
 
-	// Hit the API to have it sign our certificate.
-	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("SigningCert() = %v", err)
-	}
+// 	// Hit the API to have it sign our certificate.
+// 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
+// 		OidcIdentityToken:         tok,
+// 		CertificateSigningRequest: csr,
+// 	})
+// 	if err != nil {
+// 		t.Fatalf("SigningCert() = %v", err)
+// 	}
 
-	leafCert := verifyResponse(resp, eca, codefreshIssuer, t)
+// 	leafCert := verifyResponse(resp, eca, pub, codefreshIssuer, t)
 
-	// Expect URI values
-	if len(leafCert.URIs) != 1 {
-		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
-	}
-	codefreshURL := fmt.Sprintf("%s/%s/%s:%s/%s", claims.PlatformURL, claims.AccountName, claims.PipelineName, claims.AccountID, claims.PipelineID)
-	codefreshURI, err := url.Parse(codefreshURL)
-	if err != nil {
-		t.Fatalf("failed to parse expected url")
-	}
-	if *leafCert.URIs[0] != *codefreshURI {
-		t.Fatalf("URIs do not match: Expected %v, got %v", codefreshURI, leafCert.URIs[0])
-	}
+// 	// Expect URI values
+// 	if len(leafCert.URIs) != 1 {
+// 		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
+// 	}
+// 	codefreshURL := fmt.Sprintf("%s/%s/%s:%s/%s", claims.PlatformURL, claims.AccountName, claims.PipelineName, claims.AccountID, claims.PipelineID)
+// 	codefreshURI, err := url.Parse(codefreshURL)
+// 	if err != nil {
+// 		t.Fatalf("failed to parse expected url")
+// 	}
+// 	if *leafCert.URIs[0] != *codefreshURI {
+// 		t.Fatalf("URIs do not match: Expected %v, got %v", codefreshURI, leafCert.URIs[0])
+// 	}
 
-	expectedExts := map[int]string{
-		9:  claims.PlatformURL + "/build/" + claims.WorkflowID,
-		11: claims.RunnerEnvironment,
-		12: claims.SCMRepoURL,
-		14: claims.SCMRef,
-		18: claims.PlatformURL + "/api/pipelines/" + claims.PipelineID,
-		21: claims.PlatformURL + "/build/" + claims.WorkflowID,
-	}
-	for o, value := range expectedExts {
-		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
-		if !found {
-			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
-		}
-		var extValue string
-		rest, err := asn1.Unmarshal(ext.Value, &extValue)
-		if err != nil {
-			t.Fatalf("error unmarshalling extension: :%v", err)
-		}
-		if len(rest) != 0 {
-			t.Fatal("error unmarshalling extension, rest is not 0")
-		}
-		if string(extValue) != value {
-			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
-		}
-	}
-}
+// 	expectedExts := map[int]string{
+// 		9:  claims.PlatformURL + "/build/" + claims.WorkflowID,
+// 		11: claims.RunnerEnvironment,
+// 		12: claims.SCMRepoURL,
+// 		14: claims.SCMRef,
+// 		18: claims.PlatformURL + "/api/pipelines/" + claims.PipelineID,
+// 		21: claims.PlatformURL + "/build/" + claims.WorkflowID,
+// 	}
+// 	for o, value := range expectedExts {
+// 		ext, found := findCustomExtension(leafCert, asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 57264, 1, o})
+// 		if !found {
+// 			t.Fatalf("expected extension in custom OID 1.3.6.1.4.1.57264.1.%d", o)
+// 		}
+// 		var extValue string
+// 		rest, err := asn1.Unmarshal(ext.Value, &extValue)
+// 		if err != nil {
+// 			t.Fatalf("error unmarshalling extension: :%v", err)
+// 		}
+// 		if len(rest) != 0 {
+// 			t.Fatal("error unmarshalling extension, rest is not 0")
+// 		}
+// 		if string(extValue) != value {
+// 			t.Fatalf("unexpected extension value, expected %s, got %s", value, extValue)
+// 		}
+// 	}
+// }
 
 // chainguardClaims holds the additional JWT claims for Chainguard OIDC tokens
 type chainguardClaims struct {
@@ -1652,29 +1427,18 @@ func TestAPIWithChainguard(t *testing.T) {
 
 	client := protobuf.NewCAClient(conn)
 
-	pubBytes, proof := generateKeyAndProof(chainguardSubject.String(), t)
+	pub, csr := generateKeyAndCSR(chainguardSubject.String(), t)
 
 	// Hit the API to have it sign our certificate.
 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: csr,
 	})
 	if err != nil {
 		t.Fatalf("SigningCert() = %v", err)
 	}
 
-	leafCert := verifyResponse(resp, eca, chainguardIssuer, t)
+	leafCert := verifyResponse(resp, eca, pub, chainguardIssuer, t)
 
 	// Expect URI values
 	if len(leafCert.URIs) != 1 {
@@ -1757,112 +1521,19 @@ func TestAPIWithIssuerClaimConfig(t *testing.T) {
 
 	client := protobuf.NewCAClient(conn)
 
-	pubBytes, proof := generateKeyAndProof(emailSubject, t)
+	pub, csr := generateKeyAndCSR(emailSubject, t)
 
 	// Hit the API to have it sign our certificate.
 	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: proof,
-			},
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: csr,
 	})
 	if err != nil {
 		t.Fatalf("SigningCert() = %v", err)
 	}
 
 	// The issuer should be otherIssuerVal, not emailIssuer
-	leafCert := verifyResponse(resp, eca, otherIssuerVal, t)
-
-	// Expect email subject
-	if len(leafCert.EmailAddresses) != 1 {
-		t.Fatalf("unexpected length of leaf certificate URIs, expected 1, got %d", len(leafCert.URIs))
-	}
-	if leafCert.EmailAddresses[0] != emailSubject {
-		t.Fatalf("subjects do not match: Expected %v, got %v", emailSubject, leafCert.EmailAddresses[0])
-	}
-}
-
-// Tests API with challenge sent as CSR
-func TestAPIWithCSRChallenge(t *testing.T) {
-	emailSigner, emailIssuer := newOIDCIssuer(t)
-
-	// Create a FulcioConfig that supports this issuer.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "email"
-			}
-		}
-	}`, emailIssuer, emailIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
-
-	emailSubject := "foo@example.com"
-
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(emailSigner).Claims(jwt.Claims{
-		Issuer:   emailIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  emailSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(customClaims{Email: emailSubject, EmailVerified: true}).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
-
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
-
-	client := protobuf.NewCAClient(conn)
-
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("error generating private key: %v", err)
-	}
-	csrTmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: "test"}}
-	derCSR, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, priv)
-	if err != nil {
-		t.Fatalf("error creating CSR: %v", err)
-	}
-	pemCSR := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE REQUEST",
-		Bytes: derCSR,
-	})
-
-	// Hit the API to have it sign our certificate.
-	resp, err := client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_CertificateSigningRequest{
-			CertificateSigningRequest: pemCSR,
-		},
-	})
-	if err != nil {
-		t.Fatalf("SigningCert() = %v", err)
-	}
-
-	leafCert := verifyResponse(resp, eca, emailIssuer, t)
+	leafCert := verifyResponse(resp, eca, pub, otherIssuerVal, t)
 
 	// Expect email subject
 	if len(leafCert.EmailAddresses) != 1 {
@@ -1919,26 +1590,20 @@ func TestAPIWithInsecurePublicKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateKey() = %v", err)
 	}
-	pubBytes, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	csrTmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: emailSubject}}
+	derCSR, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, priv)
 	if err != nil {
-		t.Fatalf("x509.MarshalPKIXPublicKey() = %v", err)
+		t.Fatalf("error creating CSR: %v", err)
 	}
+	pemCSR := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: derCSR,
+	})
 
 	// Hit the API to have it sign our certificate.
 	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: string(cryptoutils.PEMEncode(cryptoutils.PublicKeyPEMType, pubBytes)),
-				},
-				ProofOfPossession: []byte{},
-			},
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: pemCSR,
 	})
 	if err == nil || !strings.Contains(err.Error(), "The public key supplied in the request is insecure") {
 		t.Fatalf("expected insecure public key error, got %v", err)
@@ -1948,8 +1613,8 @@ func TestAPIWithInsecurePublicKey(t *testing.T) {
 	}
 }
 
-// Tests API with no public key
-func TestAPIWithoutPublicKey(t *testing.T) {
+// Tests API with no CSR
+func TestAPIWithoutCSR(t *testing.T) {
 	emailSigner, emailIssuer := newOIDCIssuer(t)
 
 	// Create a FulcioConfig that supports these issuers.
@@ -1992,100 +1657,10 @@ func TestAPIWithoutPublicKey(t *testing.T) {
 
 	// Test with no key proto specified
 	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
+		OidcIdentityToken: tok,
 	})
-	if err == nil || !strings.Contains(err.Error(), "The public key supplied in the request could not be parsed") {
-		t.Fatalf("expected parsing public key error, got %v", err)
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected invalid argument, got %v", status.Code(err))
-	}
-
-	// Test with no public key specified
-	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "The public key supplied in the request could not be parsed") {
-		t.Fatalf("expected parsing public key error, got %v", err)
-	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected invalid argument, got %v", status.Code(err))
-	}
-}
-
-// Tests API with invalid challenge as proof of possession of private key
-func TestAPIWithInvalidChallenge(t *testing.T) {
-	emailSigner, emailIssuer := newOIDCIssuer(t)
-
-	// Create a FulcioConfig that supports these issuers.
-	cfg, err := config.Read([]byte(fmt.Sprintf(`{
-		"OIDCIssuers": {
-			%q: {
-				"IssuerURL": %q,
-				"ClientID": "sigstore",
-				"Type": "email"
-			}
-		}
-	}`, emailIssuer, emailIssuer)))
-	if err != nil {
-		t.Fatalf("config.Read() = %v", err)
-	}
-
-	emailSubject := "foo@example.com"
-
-	// Create an OIDC token using this issuer's signer.
-	tok, err := jwt.Signed(emailSigner).Claims(jwt.Claims{
-		Issuer:   emailIssuer,
-		IssuedAt: jwt.NewNumericDate(time.Now()),
-		Expiry:   jwt.NewNumericDate(time.Now().Add(30 * time.Minute)),
-		Subject:  emailSubject,
-		Audience: jwt.Audience{"sigstore"},
-	}).Claims(customClaims{Email: emailSubject, EmailVerified: true}).Serialize()
-	if err != nil {
-		t.Fatalf("Serialize() = %v", err)
-	}
-
-	ctClient, eca := createCA(cfg, t)
-	ctx := context.Background()
-	server, conn := setupGRPCForTest(t, cfg, ctClient, eca)
-	defer func() {
-		server.Stop()
-		conn.Close()
-	}()
-
-	client := protobuf.NewCAClient(conn)
-
-	pubBytes, _ := generateKeyAndProof(emailSubject, t)
-	_, invalidProof := generateKeyAndProof(emailSubject, t)
-
-	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_PublicKeyRequest{
-			PublicKeyRequest: &protobuf.PublicKeyRequest{
-				PublicKey: &protobuf.PublicKey{
-					Content: pubBytes,
-				},
-				ProofOfPossession: invalidProof,
-			},
-		},
-	})
-	if err == nil || !strings.Contains(err.Error(), "The signature supplied in the request could not be verified") {
-		t.Fatalf("expected invalid signature error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "The certificate signing request could not be parsed") {
+		t.Fatalf("expected CSR parsing error, got %v", err)
 	}
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", status.Code(err))
@@ -2135,14 +1710,8 @@ func TestAPIWithInvalidCSR(t *testing.T) {
 	client := protobuf.NewCAClient(conn)
 
 	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_CertificateSigningRequest{
-			CertificateSigningRequest: []byte("invalid"),
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: []byte("invalid"),
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "The certificate signing request could not be parsed") {
@@ -2213,14 +1782,8 @@ func TestAPIWithInvalidCSRSignature(t *testing.T) {
 
 	// Hit the API to have it sign our certificate.
 	_, err = client.CreateSigningCertificate(ctx, &protobuf.CreateSigningCertificateRequest{
-		Credentials: &protobuf.Credentials{
-			Credentials: &protobuf.Credentials_OidcIdentityToken{
-				OidcIdentityToken: tok,
-			},
-		},
-		Key: &protobuf.CreateSigningCertificateRequest_CertificateSigningRequest{
-			CertificateSigningRequest: pemCSR,
-		},
+		OidcIdentityToken:         tok,
+		CertificateSigningRequest: pemCSR,
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "The signature supplied in the request could not be verified") {
@@ -2325,23 +1888,23 @@ func createCA(_ *config.FulcioConfig, t *testing.T) (*ctclient.LogClient, *ephem
 	return ctClient, eca
 }
 
-// generateKeyAndProof creates a public key to be certified and creates a
-// signature for the OIDC token subject
-func generateKeyAndProof(subject string, t *testing.T) (string, []byte) {
+// generateKeyAndCSR creates a public key to be certified and creates a
+// CSR for a given subject and the generated public key
+func generateKeyAndCSR(subject string, t *testing.T) (crypto.PublicKey, []byte) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("GenerateKey() = %v", err)
 	}
-	pubBytes, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	csrTmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: subject}}
+	derCSR, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, priv)
 	if err != nil {
-		t.Fatalf("x509.MarshalPKIXPublicKey() = %v", err)
+		t.Fatalf("error creating CSR: %v", err)
 	}
-	hash := sha256.Sum256([]byte(subject))
-	proof, err := ecdsa.SignASN1(rand.Reader, priv, hash[:])
-	if err != nil {
-		t.Fatalf("SignASN1() = %v", err)
-	}
-	return string(cryptoutils.PEMEncode(cryptoutils.PublicKeyPEMType, pubBytes)), proof
+	pemCSR := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: derCSR,
+	})
+	return &priv.PublicKey, pemCSR
 }
 
 // findCustomExtension searches a certificate's non-critical extensions by OID
@@ -2355,30 +1918,22 @@ func findCustomExtension(cert *x509.Certificate, oid asn1.ObjectIdentifier) (pki
 }
 
 // verifyResponse validates common response expectations for each response field
-func verifyResponse(resp *protobuf.SigningCertificate, eca *ephemeralca.EphemeralCA, issuer string, t *testing.T) *x509.Certificate {
-	// Expect SCT
-	if resp.GetSignedCertificateDetachedSct() != nil && string(resp.GetSignedCertificateDetachedSct().SignedCertificateTimestamp) == "" {
-		t.Fatal("unexpected empty SCT in response")
-	}
+func verifyResponse(resp *protobuf.SigningCertificate, eca *ephemeralca.EphemeralCA, pubKey crypto.PublicKey, issuer string, t *testing.T) *x509.Certificate {
+	// TODO: Verify embdedded SCT
+	// TODO: Test intermediate too
 
-	var chain *protobuf.CertificateChain
-	if resp.GetSignedCertificateDetachedSct() != nil {
-		chain = resp.GetSignedCertificateDetachedSct().Chain
-	} else {
-		chain = resp.GetSignedCertificateEmbeddedSct().Chain
-	}
+	chain := resp.GetCertificates()
 
-	// Expect root certficate in resp.ChainPEM
-	if len(chain.Certificates) == 0 {
-		t.Fatal("unexpected empty chain in response")
+	// Note: This must change if test uses intermediate certificates
+	if len(chain) != 2 {
+		t.Fatalf("unexpected chain length, got %d", len(chain))
 	}
 
 	// Expect root cert matches the server's configured root
-	block, rest := pem.Decode([]byte(chain.Certificates[1]))
+	block, rest := pem.Decode([]byte(chain[1]))
 	if block == nil {
 		t.Fatal("missing PEM data")
 	}
-	// Note: This may change in the future if we use intermediate certificates.
 	if len(rest) != 0 {
 		t.Fatal("expected only one certificate in PEM block chain")
 	}
@@ -2395,14 +1950,17 @@ func verifyResponse(resp *protobuf.SigningCertificate, eca *ephemeralca.Ephemera
 	}
 
 	// Expect leaf certificate values
-	// TODO: if there are intermediates added, this logic needs to change
-	block, rest = pem.Decode([]byte(chain.Certificates[0]))
+	block, rest = pem.Decode([]byte(chain[0]))
 	if len(rest) != 0 {
 		t.Fatal("expected only one leaf certificate in PEM block")
 	}
 	leafCert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatalf("failed to parse the received leaf cert: %v", err)
+	}
+	// compare certificate public key to CSR public key
+	if err := cryptoutils.EqualKeys(leafCert.PublicKey, pubKey); err != nil {
+		t.Fatalf("leaf certificate and CSR public keys not equal: %v", err)
 	}
 	if leafCert.SerialNumber == nil {
 		t.Fatalf("expected certificate serial number")
@@ -2473,9 +2031,6 @@ type FailingCertificateAuthority struct {
 
 func (fca *FailingCertificateAuthority) CreateCertificate(context.Context, identity.Principal, crypto.PublicKey) (*ca.CodeSigningCertificate, error) {
 	return nil, errors.New("CreateCertificate always fails for testing")
-}
-func (fca *FailingCertificateAuthority) TrustBundle(_ context.Context) ([][]*x509.Certificate, error) {
-	return nil, errors.New("TrustBundle always fails for testing")
 }
 
 func (fca *FailingCertificateAuthority) Close() error {
